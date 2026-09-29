@@ -1,6 +1,8 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <dirent.h>
 #include <ctype.h>
+#include "process_info.h"
 
 int is_pid(const char *name)
 {
@@ -33,7 +35,18 @@ int main(void)
     {
         if (is_pid(entry->d_name))
         {
-            printf("PID: %s\n", entry->d_name);
+            int pid = atoi(entry->d_name);
+
+            struct ProcessInfo process = {0};
+
+            if (read_process_info(pid, &process))
+            {
+                printf("PID: %-6d Name: %-20s Memory: %ld kB Threads: %d\n",
+                       process.pid,
+                       process.name,
+                       process.memory_kb,
+                       process.threads);
+            }
         }
     }
 
