@@ -15,9 +15,13 @@ The goal is to build a runtime that can:
 - Experiment with intelligent workload scheduling
 - Provide isolation and resource controls for workloads
 
-## Current Progress
+The project is being developed incrementally, starting with a local runtime and gradually evolving toward a distributed and adaptive execution system.
 
-### Linux Process Layer
+---
+
+# Current Progress
+
+## Linux Process Layer
 
 - [x] Basic C process manager
 - [x] Process information reader using `/proc`
@@ -25,33 +29,36 @@ The goal is to build a runtime that can:
 - [x] PID detection using `/proc`
 - [x] Git/GitHub project setup
 
-### Upcoming
+## Resource Monitoring
 
-- [ ] Automatic process information collection
-- [ ] CPU and memory monitoring
-- [ ] Task execution system
-- [ ] Job/task queue
-- [ ] Basic scheduler
-- [ ] Multi-node communication
-- [ ] Failure detection and recovery
-- [ ] Distributed coordination
-- [ ] Intelligent scheduling
-- [ ] Sandboxing and resource limits
-- [ ] Benchmarking
+- [x] Process information collection
+- [x] CPU usage measurement
+- [x] CPU tick monitoring using `/proc/[PID]/stat`
+- [x] Resource snapshot abstraction
+- [x] Process memory and thread monitoring
 
-## Technology Stack
+## Task Execution
 
-- C
-- Linux / WSL2
-- Bash
-- Git / GitHub
-- Python
-- Go
-- Docker
-- eBPF
+- [x] Task abstraction
+- [x] Local task executor using `fork()` and `execvp()`
+- [x] Child process creation
+- [x] Task exit-status handling
+- [x] Task failure detection
+- [x] FIFO task queue
+- [x] Task manager
+- [x] FIFO scheduler
+- [x] End-to-end task execution
+- [x] Concurrent multi-task execution experiment
 
-## Philosophy
+## Execution Experiment
 
-The project is being developed incrementally with an emphasis on understanding the underlying systems rather than relying on high-level abstractions.
+The runtime was tested by submitting three independent tasks, each requiring approximately three seconds to execute.
 
-Each major component will be implemented, tested, measured, and documented before being integrated into the larger runtime.
+All three tasks were started before waiting for their completion.
+
+### Result
+
+```text
+Tasks      : 3
+Elapsed    : 3.01 seconds
+Expected   : approximately 3 seconds
