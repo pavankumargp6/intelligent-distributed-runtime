@@ -22,6 +22,17 @@ struct Task
     int argument_count;
     char arguments[TASK_ARGUMENT_COUNT][TASK_ARGUMENT_SIZE];
 
+    /*
+     * Resource requirements for this task.
+     *
+     * CPU requirement is expressed as a percentage
+     * of one CPU core.
+     *
+     * Memory requirement is expressed in megabytes.
+     */
+    double required_cpu_percent;
+    long required_memory_mb;
+
     enum TaskState state;
 
     int pid;
