@@ -38,4 +38,23 @@ int add_worker(struct WorkerPool *pool,
  */
 int get_worker_count(struct WorkerPool *pool);
 
+/*
+ * Find the best worker for a task.
+ *
+ * The selected worker must have enough
+ * CPU and memory for the task.
+ *
+ * Among all workers that can run the task,
+ * the worker with the most available CPU
+ * is selected.
+ *
+ * Returns:
+ *
+ * 1 -> suitable worker found
+ * 0 -> no suitable worker found
+ */
+int find_best_worker(struct WorkerPool *pool,
+                     struct Task *task,
+                     struct Worker **selected_worker);
+
 #endif
