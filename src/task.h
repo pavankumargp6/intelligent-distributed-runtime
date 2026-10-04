@@ -33,6 +33,15 @@ struct Task
     double required_cpu_percent;
     long required_memory_mb;
 
+    /*
+     * ID of the worker selected to execute
+     * this task.
+     *
+     * A value of -1 means that no worker
+     * has been assigned yet.
+     */
+    int assigned_worker_id;
+
     enum TaskState state;
 
     int pid;

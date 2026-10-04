@@ -60,6 +60,13 @@ int schedule_next_task(struct Scheduler *scheduler,
     }
 
     /*
+     * Record the selected worker directly
+     * in the task.
+     */
+    task->assigned_worker_id =
+        (*selected_worker)->id;
+
+    /*
      * A suitable worker was found.
      */
     return 1;
