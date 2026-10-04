@@ -69,6 +69,29 @@ int start_task(struct Task *task)
     return 1;
 }
 
+/*
+ * Start a task only if the scheduler has
+ * already assigned it to a worker.
+ */
+int start_assigned_task(struct Task *task)
+{
+    if (task == NULL)
+    {
+        return 0;
+    }
+
+    /*
+     * A task with worker ID -1 has not
+     * been assigned by the scheduler.
+     */
+    if (task->assigned_worker_id < 0)
+    {
+        return 0;
+    }
+
+    return start_task(task);
+}
+
 int wait_for_task(struct Task *task)
 {
     if (task == NULL)

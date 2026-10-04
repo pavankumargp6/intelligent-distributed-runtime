@@ -5,6 +5,8 @@
 
 int start_task(struct Task *task);
 
+int start_assigned_task(struct Task *task);
+
 int wait_for_task(struct Task *task);
 
 #endif
