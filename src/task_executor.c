@@ -81,6 +81,15 @@ int start_assigned_task(struct Task *task)
     }
 
     /*
+     * A task must still be in the CREATED
+     * state before execution can begin.
+     */
+    if (task->state != TASK_CREATED)
+    {
+        return 0;
+    }
+
+    /*
      * A task with worker ID -1 has not
      * been assigned by the scheduler.
      */
