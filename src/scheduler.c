@@ -3,7 +3,8 @@
 #include "scheduler.h"
 
 void initialize_scheduler(struct Scheduler *scheduler,
-                          struct TaskManager *manager)
+                          struct TaskManager *manager,
+                          struct WorkerPool *worker_pool)
 {
     if (scheduler == NULL)
     {
@@ -11,31 +12,18 @@ void initialize_scheduler(struct Scheduler *scheduler,
     }
 
     scheduler->manager = manager;
-
-    /*
-     * Collect the worker's current resources
-     * when the scheduler is initialized.
-     */
-    if (!collect_worker_resources(&scheduler->resources))
-    {
-        /*
-         * If resource collection fails,
-         * initialize the values to zero.
-         */
-        scheduler->resources.total_cpu_percent = 0.0;
-        scheduler->resources.available_cpu_percent = 0.0;
-
-        scheduler->resources.total_memory_mb = 0;
-        scheduler->resources.available_memory_mb = 0;
-    }
+    scheduler->worker_pool = worker_pool;
 }
 
 int schedule_next_task(struct Scheduler *scheduler,
-                       struct Task *task)
+                       struct Task *task,
+                       struct Worker **selected_worker)
 {
     if (scheduler == NULL ||
         scheduler->manager == NULL ||
-        task == NULL)
+        scheduler->worker_pool == NULL ||
+        task == NULL ||
+        selected_worker == NULL)
     {
         return 0;
     }
@@ -49,43 +37,30 @@ int schedule_next_task(struct Scheduler *scheduler,
     }
 
     /*
-     * Refresh the worker's resource information
-     * before making the scheduling decision.
+     * Find the best worker that has enough
+     * CPU and memory for this task.
      */
-    if (!collect_worker_resources(&scheduler->resources))
+    if (!find_best_worker(
+            scheduler->worker_pool,
+            task,
+            selected_worker))
     {
         /*
-         * Resource information is unavailable.
-         * Do not execute the task.
+         * No worker can currently execute
+         * the task.
          *
-         * The task has already been removed from
-         * the queue, so put it back.
+         * Return the task to the queue
+         * so it is not lost.
          */
         submit_task(scheduler->manager, task);
+
+        *selected_worker = NULL;
 
         return 0;
     }
 
     /*
-     * Check whether the task's resource requirements
-     * fit within the worker's current resources.
-     */
-    if (!task_fits_worker(task,
-                          &scheduler->resources))
-    {
-        /*
-         * The task cannot currently run.
-         *
-         * Put it back into the queue so it is
-         * not lost.
-         */
-        submit_task(scheduler->manager, task);
-
-        return 0;
-    }
-
-    /*
-     * The task fits on this worker.
+     * A suitable worker was found.
      */
     return 1;
 }
