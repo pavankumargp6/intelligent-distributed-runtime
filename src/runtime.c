@@ -16,6 +16,11 @@ void initialize_runtime(struct Runtime *runtime,
     runtime->task_manager = task_manager;
     runtime->scheduler = scheduler;
     runtime->worker_pool = worker_pool;
+
+    /*
+     * Initialize runtime-wide statistics.
+     */
+    initialize_runtime_stats(&runtime->stats);
 }
 
 /*
@@ -43,7 +48,23 @@ int runtime_submit_task(struct Runtime *runtime,
      */
     record_task_submission(&task->metrics);
 
-    return submit_task(runtime->task_manager, task);
+    /*
+     * Attempt to submit the task to
+     * the task manager.
+     */
+    int result =
+        submit_task(runtime->task_manager, task);
+
+    /*
+     * Only count the task as submitted
+     * if the queue accepted it.
+     */
+    if (result)
+    {
+        record_task_submitted(&runtime->stats);
+    }
+
+    return result;
 }
 
 /*
@@ -96,6 +117,7 @@ int runtime_run_next_task(struct Runtime *runtime)
      */
     if (!start_assigned_task(&task))
     {
+        record_task_failed(&runtime->stats);
         return 0;
     }
 
@@ -105,6 +127,7 @@ int runtime_run_next_task(struct Runtime *runtime)
      */
     if (!wait_for_task(&task))
     {
+        record_task_failed(&runtime->stats);
         return 0;
     }
 
@@ -112,6 +135,23 @@ int runtime_run_next_task(struct Runtime *runtime)
      * Record when execution finishes.
      */
     record_task_completion(&task.metrics);
+
+    /*
+     * Record successful or failed task
+     * metrics in runtime-wide statistics.
+     */
+    if (task.state == TASK_COMPLETED)
+    {
+        record_task_completed(
+            &runtime->stats,
+            task.metrics.queue_wait_seconds,
+            task.metrics.execution_seconds
+        );
+    }
+    else
+    {
+        record_task_failed(&runtime->stats);
+    }
 
     /*
      * Display the collected metrics.

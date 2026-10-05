@@ -6,6 +6,7 @@
 #include "worker_pool.h"
 #include "task_executor.h"
 #include "task_metrics.h"
+#include "runtime_stats.h"
 
 /*
  * Top-level controller for the
@@ -18,6 +19,11 @@ struct Runtime
     struct Scheduler *scheduler;
 
     struct WorkerPool *worker_pool;
+
+    /*
+     * Runtime-wide performance statistics.
+     */
+    struct RuntimeStats stats;
 };
 
 /*
