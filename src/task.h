@@ -1,6 +1,8 @@
 #ifndef TASK_H
 #define TASK_H
 
+#include "task_metrics.h"
+
 #define TASK_COMMAND_SIZE 256
 #define TASK_ARGUMENT_COUNT 16
 #define TASK_ARGUMENT_SIZE 128
@@ -41,6 +43,12 @@ struct Task
      * has been assigned yet.
      */
     int assigned_worker_id;
+
+    /*
+     * Timing and execution metrics
+     * collected during the task lifecycle.
+     */
+    struct TaskMetrics metrics;
 
     enum TaskState state;
 

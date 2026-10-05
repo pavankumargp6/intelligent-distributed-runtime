@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <stdio.h>
 
 #include "runtime.h"
 
@@ -29,6 +30,18 @@ int runtime_submit_task(struct Runtime *runtime,
     {
         return 0;
     }
+
+    /*
+     * Initialize metrics before the task
+     * enters the runtime queue.
+     */
+    initialize_task_metrics(&task->metrics);
+
+    /*
+     * Record when the task enters
+     * the runtime.
+     */
+    record_task_submission(&task->metrics);
 
     return submit_task(runtime->task_manager, task);
 }
@@ -70,6 +83,14 @@ int runtime_run_next_task(struct Runtime *runtime)
     }
 
     /*
+     * Record when execution begins.
+     *
+     * The submission timestamp is already
+     * stored inside the task.
+     */
+    record_task_start(&task.metrics);
+
+    /*
      * Execute only after the scheduler
      * has assigned the task.
      */
@@ -86,6 +107,24 @@ int runtime_run_next_task(struct Runtime *runtime)
     {
         return 0;
     }
+
+    /*
+     * Record when execution finishes.
+     */
+    record_task_completion(&task.metrics);
+
+    /*
+     * Display the collected metrics.
+     */
+    printf("\n");
+    printf("========================================\n");
+    printf("          TASK METRICS\n");
+    printf("========================================\n");
+    printf("Queue wait      : %.3f seconds\n",
+           task.metrics.queue_wait_seconds);
+    printf("Execution time  : %.3f seconds\n",
+           task.metrics.execution_seconds);
+    printf("========================================\n");
 
     return 1;
 }
