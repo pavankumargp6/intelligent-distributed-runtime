@@ -3,6 +3,9 @@
 #include <unistd.h>
 
 #include "worker.h"
+#include "worker_server.h"
+
+#define WORKER_SERVER_PORT 5000
 
 int main(int argc, char *argv[])
 {
@@ -73,15 +76,25 @@ int main(int argc, char *argv[])
     printf("========================================\n");
 
     /*
-     * Keep the worker agent alive.
+     * Start the worker's TCP server.
      *
-     * sleep() prevents the worker from
-     * consuming CPU while it is idle.
+     * The server will wait for an
+     * incoming connection.
      */
-    while (1)
+    if (!start_worker_server(
+            &worker,
+            WORKER_SERVER_PORT))
     {
-        sleep(5);
+        printf("Worker TCP server failed.\n");
+        return 1;
     }
+
+    /*
+     * The first server implementation
+     * handles one connection and then
+     * returns.
+     */
+    printf("Worker server stopped.\n");
 
     return 0;
 }
