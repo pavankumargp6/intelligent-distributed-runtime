@@ -7,6 +7,7 @@
 #include "task_executor.h"
 #include "task_metrics.h"
 #include "runtime_stats.h"
+#include "worker_registry.h"
 
 /*
  * Top-level controller for the
@@ -19,6 +20,12 @@ struct Runtime
     struct Scheduler *scheduler;
 
     struct WorkerPool *worker_pool;
+
+    /*
+     * Registry of workers known
+     * to the runtime.
+     */
+    struct WorkerRegistry registry;
 
     /*
      * Runtime-wide performance statistics.
@@ -39,12 +46,18 @@ int runtime_submit_task(struct Runtime *runtime,
 int runtime_run_next_task(struct Runtime *runtime);
 
 /*
- * Initialize the runtime with
- * its core subsystems.
+ * Initialize the runtime.
  */
 void initialize_runtime(struct Runtime *runtime,
                         struct TaskManager *task_manager,
                         struct Scheduler *scheduler,
                         struct WorkerPool *worker_pool);
+
+/*
+ * Register a worker with the runtime.
+ */
+int runtime_register_worker(
+    struct Runtime *runtime,
+    struct Worker *worker);
 
 #endif

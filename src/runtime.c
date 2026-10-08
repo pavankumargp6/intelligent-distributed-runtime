@@ -18,14 +18,58 @@ void initialize_runtime(struct Runtime *runtime,
     runtime->worker_pool = worker_pool;
 
     /*
-     * Initialize runtime-wide statistics.
+     * Initialize the worker registry.
      */
-    initialize_runtime_stats(&runtime->stats);
+    initialize_worker_registry(
+        &runtime->registry
+    );
+
+    /*
+     * Initialize runtime statistics.
+     */
+    initialize_runtime_stats(
+        &runtime->stats
+    );
 }
 
-/*
- * Submit a task to the runtime.
- */
+int runtime_register_worker(
+    struct Runtime *runtime,
+    struct Worker *worker)
+{
+    if (runtime == NULL ||
+        worker == NULL ||
+        runtime->worker_pool == NULL)
+    {
+        return 0;
+    }
+
+    /*
+     * Register the worker in the
+     * runtime registry.
+     */
+    if (!register_worker(
+            &runtime->registry,
+            worker))
+    {
+        return 0;
+    }
+
+    /*
+     * Add the worker to the worker pool.
+     *
+     * The scheduler uses the worker pool
+     * when selecting a worker for a task.
+     */
+    if (!add_worker(
+            runtime->worker_pool,
+            worker))
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
 int runtime_submit_task(struct Runtime *runtime,
                         struct Task *task)
 {
@@ -37,41 +81,41 @@ int runtime_submit_task(struct Runtime *runtime,
     }
 
     /*
-     * Initialize metrics before the task
-     * enters the runtime queue.
+     * Initialize task metrics.
      */
-    initialize_task_metrics(&task->metrics);
+    initialize_task_metrics(
+        &task->metrics
+    );
 
     /*
-     * Record when the task enters
+     * Record when the task entered
      * the runtime.
      */
-    record_task_submission(&task->metrics);
+    record_task_submission(
+        &task->metrics
+    );
 
     /*
-     * Attempt to submit the task to
-     * the task manager.
+     * Put the task into the FIFO queue.
      */
     int result =
-        submit_task(runtime->task_manager, task);
+        submit_task(
+            runtime->task_manager,
+            task
+        );
 
-    /*
-     * Only count the task as submitted
-     * if the queue accepted it.
-     */
     if (result)
     {
-        record_task_submitted(&runtime->stats);
+        record_task_submitted(
+            &runtime->stats
+        );
     }
 
     return result;
 }
 
-/*
- * Schedule and execute the next
- * available task.
- */
-int runtime_run_next_task(struct Runtime *runtime)
+int runtime_run_next_task(
+    struct Runtime *runtime)
 {
     if (runtime == NULL ||
         runtime->scheduler == NULL)
@@ -79,13 +123,14 @@ int runtime_run_next_task(struct Runtime *runtime)
         return 0;
     }
 
+    /*
+     * The scheduler will retrieve the
+     * next task and select a worker.
+     */
     struct Task task = {0};
+
     struct Worker *selected_worker = NULL;
 
-    /*
-     * Ask the scheduler for the next
-     * executable task and worker.
-     */
     if (!schedule_next_task(
             runtime->scheduler,
             &task,
@@ -95,8 +140,7 @@ int runtime_run_next_task(struct Runtime *runtime)
     }
 
     /*
-     * The scheduler must provide a worker
-     * before execution can begin.
+     * Make sure a worker was selected.
      */
     if (selected_worker == NULL)
     {
@@ -105,40 +149,44 @@ int runtime_run_next_task(struct Runtime *runtime)
 
     /*
      * Record when execution begins.
-     *
-     * The submission timestamp is already
-     * stored inside the task.
      */
-    record_task_start(&task.metrics);
+    record_task_start(
+        &task.metrics
+    );
 
     /*
-     * Execute only after the scheduler
-     * has assigned the task.
+     * Start the task on the selected worker.
      */
     if (!start_assigned_task(&task))
     {
-        record_task_failed(&runtime->stats);
+        record_task_failed(
+            &runtime->stats
+        );
+
         return 0;
     }
 
     /*
-     * Wait for the task to finish and
-     * update its final state.
+     * Wait for the task process to finish.
      */
     if (!wait_for_task(&task))
     {
-        record_task_failed(&runtime->stats);
+        record_task_failed(
+            &runtime->stats
+        );
+
         return 0;
     }
 
     /*
-     * Record when execution finishes.
+     * Record completion timing.
      */
-    record_task_completion(&task.metrics);
+    record_task_completion(
+        &task.metrics
+    );
 
     /*
-     * Record successful or failed task
-     * metrics in runtime-wide statistics.
+     * Update runtime statistics.
      */
     if (task.state == TASK_COMPLETED)
     {
@@ -150,20 +198,29 @@ int runtime_run_next_task(struct Runtime *runtime)
     }
     else
     {
-        record_task_failed(&runtime->stats);
+        record_task_failed(
+            &runtime->stats
+        );
     }
 
     /*
-     * Display the collected metrics.
+     * Display task metrics.
      */
     printf("\n");
     printf("========================================\n");
     printf("          TASK METRICS\n");
     printf("========================================\n");
-    printf("Queue wait      : %.3f seconds\n",
-           task.metrics.queue_wait_seconds);
-    printf("Execution time  : %.3f seconds\n",
-           task.metrics.execution_seconds);
+
+    printf(
+        "Queue wait      : %.3f seconds\n",
+        task.metrics.queue_wait_seconds
+    );
+
+    printf(
+        "Execution time  : %.3f seconds\n",
+        task.metrics.execution_seconds
+    );
+
     printf("========================================\n");
 
     return 1;
