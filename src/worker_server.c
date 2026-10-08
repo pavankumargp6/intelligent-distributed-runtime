@@ -4,9 +4,9 @@
 
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
 
 #include "worker_server.h"
+#include "network_protocol.h"
 
 int start_worker_server(struct Worker *worker,
                         int port)
@@ -17,7 +17,7 @@ int start_worker_server(struct Worker *worker,
     }
 
     /*
-     * Create a TCP socket.
+     * Create TCP socket.
      */
     int server_socket =
         socket(AF_INET, SOCK_STREAM, 0);
@@ -29,9 +29,8 @@ int start_worker_server(struct Worker *worker,
     }
 
     /*
-     * Allow the operating system to
-     * reuse the port after the server
-     * is restarted.
+     * Allow the port to be reused
+     * when restarting the worker.
      */
     int reuse = 1;
 
@@ -48,29 +47,20 @@ int start_worker_server(struct Worker *worker,
     }
 
     /*
-     * Describe the server address.
+     * Configure server address.
      */
     struct sockaddr_in server_address = {0};
 
     server_address.sin_family = AF_INET;
 
-    /*
-     * Accept connections through any
-     * local network interface.
-     */
     server_address.sin_addr.s_addr =
         htonl(INADDR_ANY);
 
-    /*
-     * Convert the port to network
-     * byte order.
-     */
     server_address.sin_port =
         htons(port);
 
     /*
-     * Bind the socket to the address
-     * and port.
+     * Bind socket to port.
      */
     if (bind(
             server_socket,
@@ -83,7 +73,7 @@ int start_worker_server(struct Worker *worker,
     }
 
     /*
-     * Put the socket into listening mode.
+     * Start listening.
      */
     if (listen(server_socket, 5) < 0)
     {
@@ -104,7 +94,7 @@ int start_worker_server(struct Worker *worker,
     printf("========================================\n");
 
     /*
-     * Wait for one incoming connection.
+     * Accept one client connection.
      */
     struct sockaddr_in client_address;
 
@@ -128,90 +118,62 @@ int start_worker_server(struct Worker *worker,
     printf("Client connected.\n");
 
     /*
-     * Receive a message from the client.
+     * Receive one framed message.
      */
-    char buffer[128] = {0};
+    char buffer[128];
 
-    ssize_t bytes_received =
-        recv(
+    if (!receive_message(
             client_socket,
             buffer,
-            sizeof(buffer) - 1,
-            0
-        );
-
-    if (bytes_received < 0)
+            sizeof(buffer)))
     {
-        perror("recv");
+        printf("Failed to receive message.\n");
+
         close(client_socket);
         close(server_socket);
+
         return 0;
     }
-
-    /*
-     * TCP is a byte stream.
-     *
-     * Add a null terminator so that
-     * the received bytes can safely
-     * be treated as a C string.
-     */
-    buffer[bytes_received] = '\0';
 
     printf("Received: %s\n", buffer);
 
     /*
-     * Respond to a PING request.
+     * Process the command.
      */
     if (strcmp(buffer, "PING") == 0)
     {
-        const char *response = "PONG";
-
-        if (send(
+        if (!send_message(
                 client_socket,
-                response,
-                strlen(response),
-                0
-            ) < 0)
+                "PONG"))
         {
-            perror("send");
+            printf("Failed to send PONG.\n");
+
             close(client_socket);
             close(server_socket);
+
             return 0;
         }
 
-        printf("Sent: %s\n", response);
+        printf("Sent: PONG\n");
     }
     else
     {
-        const char *response = "UNKNOWN_COMMAND";
-
-        if (send(
+        if (!send_message(
                 client_socket,
-                response,
-                strlen(response),
-                0
-            ) < 0)
+                "UNKNOWN_COMMAND"))
         {
-            perror("send");
+            printf("Failed to send response.\n");
+
             close(client_socket);
             close(server_socket);
+
             return 0;
         }
 
-        printf("Sent: %s\n", response);
+        printf("Sent: UNKNOWN_COMMAND\n");
     }
 
-    /*
-     * Close the client connection.
-     */
     close(client_socket);
-
-    printf("Client disconnected.\n");
-
-    /*
-     * This first protocol implementation
-     * handles one connection.
-     */
     close(server_socket);
 
     printf("Worker server stopped.\n");

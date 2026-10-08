@@ -6,10 +6,12 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include "network_protocol.h"
+
 int main(void)
 {
     /*
-     * Create a TCP socket.
+     * Create TCP socket.
      */
     int client_socket =
         socket(AF_INET, SOCK_STREAM, 0);
@@ -21,16 +23,12 @@ int main(void)
     }
 
     /*
-     * Describe the worker server.
+     * Configure worker address.
      */
     struct sockaddr_in server_address = {0};
 
     server_address.sin_family = AF_INET;
 
-    /*
-     * The worker is running on the
-     * same machine.
-     */
     if (inet_pton(
             AF_INET,
             "127.0.0.1",
@@ -41,13 +39,11 @@ int main(void)
         return 1;
     }
 
-    /*
-     * Worker TCP port.
-     */
-    server_address.sin_port = htons(5000);
+    server_address.sin_port =
+        htons(5000);
 
     /*
-     * Connect to the worker.
+     * Connect to worker.
      */
     if (connect(
             client_socket,
@@ -62,62 +58,48 @@ int main(void)
     printf("Connected to worker.\n");
 
     /*
-     * Send a PING message.
+     * Send framed PING message.
      */
-    const char *message = "PING";
-
-    if (send(
+    if (!send_message(
             client_socket,
-            message,
-            strlen(message),
-            0) < 0)
+            "PING"))
     {
-        perror("send");
+        printf("Failed to send PING.\n");
         close(client_socket);
         return 1;
     }
 
-    printf("Sent: %s\n", message);
+    printf("Sent: PING\n");
 
     /*
-     * Receive the worker's response.
+     * Receive framed response.
      */
-    char buffer[128] = {0};
+    char buffer[128];
 
-    ssize_t bytes_received =
-        recv(
+    if (!receive_message(
             client_socket,
             buffer,
-            sizeof(buffer) - 1,
-            0
-        );
-
-    if (bytes_received < 0)
+            sizeof(buffer)))
     {
-        perror("recv");
+        printf("Failed to receive response.\n");
         close(client_socket);
         return 1;
     }
-
-    buffer[bytes_received] = '\0';
 
     printf("Received: %s\n", buffer);
 
-    /*
-     * Close the connection.
-     */
     close(client_socket);
 
     /*
-     * Verify the expected response.
+     * Verify response.
      */
     if (strcmp(buffer, "PONG") == 0)
     {
-        printf("PING/PONG test passed. ✅\n");
+        printf("Framed PING/PONG test passed. ✅\n");
         return 0;
     }
 
-    printf("PING/PONG test failed. ❌\n");
+    printf("Framed PING/PONG test failed. ❌\n");
 
     return 1;
 }
