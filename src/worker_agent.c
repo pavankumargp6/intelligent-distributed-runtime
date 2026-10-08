@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 
 #include "worker.h"
 #include "worker_server.h"
@@ -10,8 +9,8 @@
 int main(int argc, char *argv[])
 {
     /*
-     * The worker ID is provided
-     * as a command-line argument.
+     * Worker ID is provided through
+     * the command line.
      *
      * Example:
      *
@@ -32,17 +31,13 @@ int main(int argc, char *argv[])
     }
 
     /*
-     * Create the worker.
+     * Create and initialize the worker.
      */
     struct Worker worker;
 
-    /*
-     * Initialize the worker.
-     *
-     * This collects the worker's
-     * current CPU and memory resources.
-     */
-    if (!initialize_worker(&worker, worker_id))
+    if (!initialize_worker(
+            &worker,
+            worker_id))
     {
         printf("Failed to initialize worker.\n");
         return 1;
@@ -56,30 +51,32 @@ int main(int argc, char *argv[])
     printf("             WORKER AGENT\n");
     printf("========================================\n");
 
-    printf("Worker ID           : %d\n",
+    printf("Worker ID        : %d\n",
            worker.id);
 
-    printf("Total CPU           : %.2f%%\n",
+    printf("Total CPU        : %.2f%%\n",
            worker.resources.total_cpu_percent);
 
-    printf("Available CPU       : %.2f%%\n",
+    printf("Available CPU    : %.2f%%\n",
            worker.resources.available_cpu_percent);
 
-    printf("Total Memory        : %ld MB\n",
+    printf("Total Memory     : %ld MB\n",
            worker.resources.total_memory_mb);
 
-    printf("Available Memory    : %ld MB\n",
+    printf("Available Memory : %ld MB\n",
            worker.resources.available_memory_mb);
 
-    printf("Status              : READY\n");
+    printf("Status           : READY\n");
 
     printf("========================================\n");
 
     /*
-     * Start the worker's TCP server.
+     * Start the worker TCP server.
      *
-     * The server will wait for an
-     * incoming connection.
+     * For now this server still handles
+     * incoming connections. Registration
+     * will be handled by the coordinator
+     * side next.
      */
     if (!start_worker_server(
             &worker,
@@ -88,13 +85,6 @@ int main(int argc, char *argv[])
         printf("Worker TCP server failed.\n");
         return 1;
     }
-
-    /*
-     * The first server implementation
-     * handles one connection and then
-     * returns.
-     */
-    printf("Worker server stopped.\n");
 
     return 0;
 }
