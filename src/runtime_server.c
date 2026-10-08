@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -309,57 +310,96 @@ int start_runtime_server(
     printf("========================================\n");
 
     /*
-     * ------------------------------------------------
-     * Persistent coordinator loop
-     * ------------------------------------------------
+     * Configure poll().
      *
-     * The coordinator stays alive and handles
-     * one connection after another.
+     * We monitor the server socket for
+     * incoming worker connections.
+     */
+    struct pollfd server_poll;
+
+    server_poll.fd = server_socket;
+    server_poll.events = POLLIN;
+    server_poll.revents = 0;
+
+    /*
+     * Check worker liveness every second.
+     */
+    const int poll_timeout_ms = 1000;
+
+    /*
+     * ------------------------------------------------
+     * Event loop
+     * ------------------------------------------------
      */
     while (1)
     {
-        struct sockaddr_in worker_address;
-
-        socklen_t worker_length =
-            sizeof(worker_address);
-
         /*
-         * Wait for the next worker connection.
+         * Wait for either:
+         *
+         * 1. A new worker connection
+         * 2. The one-second timeout
          */
-        int worker_socket =
-            accept(
-                server_socket,
-                (struct sockaddr *)&worker_address,
-                &worker_length
+        int poll_result =
+            poll(
+                &server_poll,
+                1,
+                poll_timeout_ms
             );
 
-        if (worker_socket < 0)
+        if (poll_result < 0)
         {
-            perror("accept");
+            perror("poll");
             continue;
         }
 
-        printf(
-            "\nWorker connection accepted.\n"
-        );
-
         /*
-         * Process the worker's message.
+         * A connection arrived.
          */
-        handle_worker_message(
-            runtime,
-            worker_socket
-        );
+        if (poll_result > 0 &&
+            (server_poll.revents & POLLIN))
+        {
+            struct sockaddr_in worker_address;
+
+            socklen_t worker_length =
+                sizeof(worker_address);
+
+            int worker_socket =
+                accept(
+                    server_socket,
+                    (struct sockaddr *)&worker_address,
+                    &worker_length
+                );
+
+            if (worker_socket < 0)
+            {
+                perror("accept");
+            }
+            else
+            {
+                printf(
+                    "\nWorker connection accepted.\n"
+                );
+
+                /*
+                 * Process one request.
+                 */
+                handle_worker_message(
+                    runtime,
+                    worker_socket
+                );
+
+                /*
+                 * Each connection currently
+                 * represents one request.
+                 */
+                close(worker_socket);
+            }
+        }
 
         /*
-         * This connection carries one
-         * request/response exchange.
-         */
-        close(worker_socket);
-
-        /*
-         * Check for workers that have not
-         * sent a heartbeat recently.
+         * The poll timeout lets us perform
+         * failure detection even when there
+         * are no incoming connections.
          */
         int stale_workers =
             mark_stale_workers(
@@ -375,10 +415,6 @@ int start_runtime_server(
         }
     }
 
-    /*
-     * This point is currently unreachable
-     * because the coordinator runs continuously.
-     */
     close(server_socket);
 
     return 1;

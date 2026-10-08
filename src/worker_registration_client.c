@@ -154,3 +154,138 @@ int register_worker_with_runtime(
 
     return 0;
 }
+
+int send_worker_heartbeat(
+    const struct Worker *worker,
+    const char *runtime_address)
+{
+    if (worker == NULL ||
+        runtime_address == NULL)
+    {
+        return 0;
+    }
+
+    /*
+     * Create TCP socket.
+     */
+    int socket_fd =
+        socket(AF_INET, SOCK_STREAM, 0);
+
+    if (socket_fd < 0)
+    {
+        perror("socket");
+        return 0;
+    }
+
+    /*
+     * Configure runtime address.
+     */
+    struct sockaddr_in server_address = {0};
+
+    server_address.sin_family = AF_INET;
+
+    if (inet_pton(
+            AF_INET,
+            runtime_address,
+            &server_address.sin_addr) <= 0)
+    {
+        perror("inet_pton");
+        close(socket_fd);
+        return 0;
+    }
+
+    server_address.sin_port =
+        htons(RUNTIME_SERVER_PORT);
+
+    /*
+     * Connect to runtime coordinator.
+     */
+    if (connect(
+            socket_fd,
+            (struct sockaddr *)&server_address,
+            sizeof(server_address)) < 0)
+    {
+        perror("connect");
+        close(socket_fd);
+        return 0;
+    }
+
+    /*
+     * Build heartbeat message.
+     */
+    char heartbeat_message[128];
+
+    if (!build_worker_heartbeat(
+            worker,
+            heartbeat_message,
+            sizeof(heartbeat_message)))
+    {
+        printf(
+            "Failed to build heartbeat message.\n"
+        );
+
+        close(socket_fd);
+        return 0;
+    }
+
+    /*
+     * Send heartbeat.
+     */
+    if (!send_message(
+            socket_fd,
+            heartbeat_message))
+    {
+        printf(
+            "Failed to send heartbeat.\n"
+        );
+
+        close(socket_fd);
+        return 0;
+    }
+
+    printf(
+        "Sent: %s\n",
+        heartbeat_message
+    );
+
+    /*
+     * Receive acknowledgement.
+     */
+    char response[128];
+
+    if (!receive_message(
+            socket_fd,
+            response,
+            sizeof(response)))
+    {
+        printf(
+            "Failed to receive heartbeat response.\n"
+        );
+
+        close(socket_fd);
+        return 0;
+    }
+
+    close(socket_fd);
+
+    /*
+     * Verify heartbeat acknowledgement.
+     */
+    if (strcmp(
+            response,
+            "HEARTBEAT_ACK") == 0)
+    {
+        printf(
+            "Heartbeat acknowledged. ✅\n"
+        );
+
+        return 1;
+    }
+
+    printf(
+        "Heartbeat rejected: %s\n",
+        response
+    );
+
+    return 0;
+}

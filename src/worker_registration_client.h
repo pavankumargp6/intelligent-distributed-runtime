@@ -12,6 +12,19 @@
  */
 int register_worker_with_runtime(
     struct Worker *worker,
-    const char *runtime_address);
+    const char *runtime_address
+);
+
+/*
+ * Connect to the runtime coordinator
+ * and send one heartbeat.
+ *
+ * Returns 1 on success.
+ * Returns 0 on failure.
+ */
+int send_worker_heartbeat(
+    const struct Worker *worker,
+    const char *runtime_address
+);
 
 #endif
