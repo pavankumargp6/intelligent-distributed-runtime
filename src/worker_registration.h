@@ -32,4 +32,30 @@ int parse_worker_registration(
     struct Worker *worker
 );
 
+/*
+ * Build a heartbeat message.
+ *
+ * Format:
+ *
+ * HEARTBEAT|worker_id
+ */
+int build_worker_heartbeat(
+    const struct Worker *worker,
+    char *buffer,
+    int buffer_size
+);
+
+/*
+ * Parse a heartbeat message.
+ *
+ * Returns the worker ID through worker_id.
+ *
+ * Returns 1 on success.
+ * Returns 0 on invalid input.
+ */
+int parse_worker_heartbeat(
+    const char *message,
+    int *worker_id
+);
+
 #endif

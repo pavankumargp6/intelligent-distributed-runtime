@@ -9,6 +9,214 @@
 #include "network_protocol.h"
 #include "worker_registration.h"
 
+static int handle_worker_message(
+    struct Runtime *runtime,
+    int worker_socket)
+{
+    char message[
+        WORKER_REGISTRATION_MESSAGE_SIZE
+    ];
+
+    /*
+     * Receive one framed message.
+     */
+    if (!receive_message(
+            worker_socket,
+            message,
+            sizeof(message)))
+    {
+        printf(
+            "Failed to receive worker message.\n"
+        );
+
+        return 0;
+    }
+
+    printf(
+        "Received: %s\n",
+        message
+    );
+
+    /*
+     * ------------------------------------------------
+     * Worker registration
+     * ------------------------------------------------
+     */
+    if (strncmp(
+            message,
+            "REGISTER|",
+            9) == 0)
+    {
+        struct Worker worker = {0};
+
+        if (!parse_worker_registration(
+                message,
+                &worker))
+        {
+            printf(
+                "Invalid worker registration.\n"
+            );
+
+            send_message(
+                worker_socket,
+                "REGISTER_REJECT"
+            );
+
+            return 0;
+        }
+
+        printf("\n");
+        printf("Worker registration:\n");
+
+        printf(
+            "Worker ID      : %d\n",
+            worker.id
+        );
+
+        printf(
+            "Total CPU      : %.2f%%\n",
+            worker.resources.total_cpu_percent
+        );
+
+        printf(
+            "Total Memory   : %ld MB\n",
+            worker.resources.total_memory_mb
+        );
+
+        /*
+         * Register the worker with the runtime.
+         */
+        if (!runtime_register_worker(
+                runtime,
+                &worker))
+        {
+            printf(
+                "Failed to register worker.\n"
+            );
+
+            send_message(
+                worker_socket,
+                "REGISTER_REJECT"
+            );
+
+            return 0;
+        }
+
+        printf(
+            "Worker registered with runtime. ✅\n"
+        );
+
+        /*
+         * Send registration acknowledgement.
+         */
+        if (!send_message(
+                worker_socket,
+                "REGISTER_ACK"))
+        {
+            printf(
+                "Failed to send registration acknowledgement.\n"
+            );
+
+            return 0;
+        }
+
+        printf(
+            "Sent: REGISTER_ACK\n"
+        );
+
+        return 1;
+    }
+
+    /*
+     * ------------------------------------------------
+     * Worker heartbeat
+     * ------------------------------------------------
+     */
+    if (strncmp(
+            message,
+            "HEARTBEAT|",
+            10) == 0)
+    {
+        int worker_id;
+
+        if (!parse_worker_heartbeat(
+                message,
+                &worker_id))
+        {
+            printf(
+                "Invalid heartbeat message.\n"
+            );
+
+            send_message(
+                worker_socket,
+                "HEARTBEAT_REJECT"
+            );
+
+            return 0;
+        }
+
+        printf(
+            "Heartbeat received from worker %d.\n",
+            worker_id
+        );
+
+        /*
+         * Update the worker's last-seen time.
+         */
+        if (!update_worker_heartbeat(
+                &runtime->registry,
+                worker_id))
+        {
+            printf(
+                "Unknown worker: %d\n",
+                worker_id
+            );
+
+            send_message(
+                worker_socket,
+                "HEARTBEAT_REJECT"
+            );
+
+            return 0;
+        }
+
+        /*
+         * Send heartbeat acknowledgement.
+         */
+        if (!send_message(
+                worker_socket,
+                "HEARTBEAT_ACK"))
+        {
+            printf(
+                "Failed to send heartbeat acknowledgement.\n"
+            );
+
+            return 0;
+        }
+
+        printf(
+            "Sent: HEARTBEAT_ACK\n"
+        );
+
+        return 1;
+    }
+
+    /*
+     * Unknown message.
+     */
+    printf(
+        "Unknown message: %s\n",
+        message
+    );
+
+    send_message(
+        worker_socket,
+        "UNKNOWN_COMMAND"
+    );
+
+    return 0;
+}
+
 int start_runtime_server(
     struct Runtime *runtime,
     int port)
@@ -62,7 +270,7 @@ int start_runtime_server(
         htons(port);
 
     /*
-     * Bind the socket.
+     * Bind socket to the requested port.
      */
     if (bind(
             server_socket,
@@ -77,7 +285,7 @@ int start_runtime_server(
     /*
      * Start listening for workers.
      */
-    if (listen(server_socket, 5) < 0)
+    if (listen(server_socket, 16) < 0)
     {
         perror("listen");
         close(server_socket);
@@ -89,151 +297,89 @@ int start_runtime_server(
     printf("        RUNTIME TCP COORDINATOR\n");
     printf("========================================\n");
 
-    printf("Port   : %d\n", port);
-    printf("Status : LISTENING\n");
+    printf(
+        "Port   : %d\n",
+        port
+    );
+
+    printf(
+        "Status : LISTENING\n"
+    );
 
     printf("========================================\n");
 
     /*
-     * Accept one worker connection.
+     * ------------------------------------------------
+     * Persistent coordinator loop
+     * ------------------------------------------------
+     *
+     * The coordinator stays alive and handles
+     * one connection after another.
      */
-    struct sockaddr_in worker_address;
-
-    socklen_t worker_length =
-        sizeof(worker_address);
-
-    int worker_socket =
-        accept(
-            server_socket,
-            (struct sockaddr *)&worker_address,
-            &worker_length
-        );
-
-    if (worker_socket < 0)
+    while (1)
     {
-        perror("accept");
-        close(server_socket);
-        return 0;
-    }
+        struct sockaddr_in worker_address;
 
-    printf("Worker connected.\n");
+        socklen_t worker_length =
+            sizeof(worker_address);
 
-    /*
-     * Receive registration message.
-     */
-    char message[
-        WORKER_REGISTRATION_MESSAGE_SIZE
-    ];
+        /*
+         * Wait for the next worker connection.
+         */
+        int worker_socket =
+            accept(
+                server_socket,
+                (struct sockaddr *)&worker_address,
+                &worker_length
+            );
 
-    if (!receive_message(
-            worker_socket,
-            message,
-            sizeof(message)))
-    {
+        if (worker_socket < 0)
+        {
+            perror("accept");
+            continue;
+        }
+
         printf(
-            "Failed to receive worker registration.\n"
+            "\nWorker connection accepted.\n"
         );
 
-        close(worker_socket);
-        close(server_socket);
-
-        return 0;
-    }
-
-    printf("Received: %s\n", message);
-
-    /*
-     * Convert registration message
-     * into a Worker structure.
-     */
-    struct Worker worker = {0};
-
-    if (!parse_worker_registration(
-            message,
-            &worker))
-    {
-        printf(
-            "Invalid worker registration.\n"
-        );
-
-        send_message(
-            worker_socket,
-            "REGISTER_REJECT"
-        );
-
-        close(worker_socket);
-        close(server_socket);
-
-        return 0;
-    }
-
-    printf("\n");
-    printf("Worker registration:\n");
-    printf("Worker ID      : %d\n",
-           worker.id);
-
-    printf("Total CPU      : %.2f%%\n",
-           worker.resources.total_cpu_percent);
-
-    printf("Total Memory   : %ld MB\n",
-           worker.resources.total_memory_mb);
-
-    /*
-     * Register the worker with the runtime.
-     */
-    if (!runtime_register_worker(
+        /*
+         * Process the worker's message.
+         */
+        handle_worker_message(
             runtime,
-            &worker))
-    {
-        printf(
-            "Failed to register worker.\n"
+            worker_socket
         );
 
-        send_message(
-            worker_socket,
-            "REGISTER_REJECT"
-        );
-
+        /*
+         * This connection carries one
+         * request/response exchange.
+         */
         close(worker_socket);
-        close(server_socket);
 
-        return 0;
+        /*
+         * Check for workers that have not
+         * sent a heartbeat recently.
+         */
+        int stale_workers =
+            mark_stale_workers(
+                &runtime->registry
+            );
+
+        if (stale_workers > 0)
+        {
+            printf(
+                "Workers marked unavailable: %d\n",
+                stale_workers
+            );
+        }
     }
 
-    printf(
-        "Worker registered with runtime. ✅\n"
-    );
-
     /*
-     * Send acknowledgement.
+     * This point is currently unreachable
+     * because the coordinator runs continuously.
      */
-    if (!send_message(
-            worker_socket,
-            "REGISTER_ACK"))
-    {
-        printf(
-            "Failed to send registration acknowledgement.\n"
-        );
-
-        close(worker_socket);
-        close(server_socket);
-
-        return 0;
-    }
-
-    printf(
-        "Sent: REGISTER_ACK\n"
-    );
-
-    /*
-     * Close this registration connection.
-     */
-    close(worker_socket);
     close(server_socket);
-
-    printf(
-        "Runtime coordinator stopped.\n"
-    );
 
     return 1;
 }

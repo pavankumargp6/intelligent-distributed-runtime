@@ -1,16 +1,53 @@
 #ifndef WORKER_REGISTRY_H
 #define WORKER_REGISTRY_H
 
+#include <time.h>
+
 #include "worker.h"
 
 #define WORKER_REGISTRY_CAPACITY 32
 
 /*
- * Stores the currently known workers.
+ * A worker is considered unavailable if
+ * the runtime has not heard from it for
+ * this many seconds.
  */
+#define WORKER_HEARTBEAT_TIMEOUT 10
+
+/*
+ * Current state of a registered worker.
+ */
+enum WorkerStatus
+{
+    WORKER_ACTIVE = 0,
+    WORKER_UNAVAILABLE = 1
+};
+
+/*
+ * Stores a worker together with
+ * liveness information.
+ */
+struct WorkerRegistryEntry
+{
+    struct Worker worker;
+
+    /*
+     * Time when the runtime last heard
+     * from this worker.
+     */
+    time_t last_seen;
+
+    /*
+     * Current availability state.
+     */
+    enum WorkerStatus status;
+};
+
 struct WorkerRegistry
 {
-    struct Worker workers[WORKER_REGISTRY_CAPACITY];
+    struct WorkerRegistryEntry workers[
+        WORKER_REGISTRY_CAPACITY
+    ];
 
     int count;
 };
@@ -24,9 +61,6 @@ void initialize_worker_registry(
 
 /*
  * Register a worker.
- *
- * Returns 1 on success.
- * Returns 0 on failure.
  */
 int register_worker(
     struct WorkerRegistry *registry,
@@ -35,13 +69,32 @@ int register_worker(
 
 /*
  * Find a worker by ID.
- *
- * Returns a pointer to the worker
- * if found, otherwise NULL.
  */
 struct Worker *find_registered_worker(
     struct WorkerRegistry *registry,
     int worker_id
+);
+
+/*
+ * Update the last-seen time of a worker.
+ *
+ * Returns 1 if the worker exists.
+ * Returns 0 otherwise.
+ */
+int update_worker_heartbeat(
+    struct WorkerRegistry *registry,
+    int worker_id
+);
+
+/*
+ * Mark workers as unavailable when
+ * their heartbeat has timed out.
+ *
+ * Returns the number of workers
+ * that became unavailable.
+ */
+int mark_stale_workers(
+    struct WorkerRegistry *registry
 );
 
 /*

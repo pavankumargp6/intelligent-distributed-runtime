@@ -83,3 +83,64 @@ int parse_worker_registration(
 
     return 1;
 }
+
+int build_worker_heartbeat(
+    const struct Worker *worker,
+    char *buffer,
+    int buffer_size)
+{
+    if (worker == NULL ||
+        buffer == NULL ||
+        buffer_size <= 0)
+    {
+        return 0;
+    }
+
+    int written = snprintf(
+        buffer,
+        buffer_size,
+        "HEARTBEAT|%d",
+        worker->id
+    );
+
+    if (written < 0 ||
+        written >= buffer_size)
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+int parse_worker_heartbeat(
+    const char *message,
+    int *worker_id)
+{
+    if (message == NULL ||
+        worker_id == NULL)
+    {
+        return 0;
+    }
+
+    int parsed_id;
+
+    int fields = sscanf(
+        message,
+        "HEARTBEAT|%d",
+        &parsed_id
+    );
+
+    if (fields != 1)
+    {
+        return 0;
+    }
+
+    if (parsed_id <= 0)
+    {
+        return 0;
+    }
+
+    *worker_id = parsed_id;
+
+    return 1;
+}
