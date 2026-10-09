@@ -13,6 +13,7 @@ void initialize_scheduler(struct Scheduler *scheduler,
 
     scheduler->manager = manager;
     scheduler->worker_pool = worker_pool;
+    scheduler->registry = NULL;
 }
 
 int schedule_next_task(struct Scheduler *scheduler,
@@ -22,6 +23,7 @@ int schedule_next_task(struct Scheduler *scheduler,
     if (scheduler == NULL ||
         scheduler->manager == NULL ||
         scheduler->worker_pool == NULL ||
+        scheduler->registry == NULL ||
         task == NULL ||
         selected_worker == NULL)
     {
@@ -42,6 +44,7 @@ int schedule_next_task(struct Scheduler *scheduler,
      */
     if (!find_best_worker(
             scheduler->worker_pool,
+            scheduler->registry,
             task,
             selected_worker))
     {

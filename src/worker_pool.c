@@ -76,12 +76,12 @@ int get_worker_count(struct WorkerPool *pool)
  * with the most available CPU.
  */
 int find_best_worker(struct WorkerPool *pool,
+                     struct WorkerRegistry *registry,
                      struct Task *task,
                      struct Worker **selected_worker)
 {
-    if (pool == NULL ||
-        task == NULL ||
-        selected_worker == NULL) {
+    if (pool == NULL || registry == NULL ||
+        task == NULL || selected_worker == NULL) {
         return 0;
     }
 
@@ -89,19 +89,25 @@ int find_best_worker(struct WorkerPool *pool,
 
     for (int i = 0; i < pool->count; i++) {
         struct Worker *worker = &pool->workers[i];
+        int active = 0;
 
-        if (!task_fits_worker(
-                task,
-                &worker->resources)) {
+        for (int j = 0; j < registry->count; j++) {
+            if (registry->workers[j].worker.id == worker->id) {
+                active = (registry->workers[j].status == WORKER_ACTIVE);
+                break;
+            }
+        }
+
+        if (!active) {
             continue;
         }
 
-        if (*selected_worker == NULL) {
-            *selected_worker = worker;
+        if (!task_fits_worker(task, &worker->resources)) {
             continue;
         }
 
-        if (worker->resources.available_cpu_percent >
+        if (*selected_worker == NULL ||
+            worker->resources.available_cpu_percent >
             (*selected_worker)->resources.available_cpu_percent) {
             *selected_worker = worker;
         }

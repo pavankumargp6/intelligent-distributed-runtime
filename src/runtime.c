@@ -24,6 +24,11 @@ void initialize_runtime(struct Runtime *runtime,
         &runtime->registry
     );
 
+    if (runtime->scheduler != NULL)
+    {
+        runtime->scheduler->registry = &runtime->registry;
+    }
+
     /*
      * Initialize runtime statistics.
      */

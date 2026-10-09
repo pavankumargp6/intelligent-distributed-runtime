@@ -2,6 +2,7 @@
 #define WORKER_POOL_H
 
 #include "worker.h"
+#include "worker_registry.h"
 
 #define WORKER_POOL_CAPACITY 16
 
@@ -54,6 +55,7 @@ int get_worker_count(struct WorkerPool *pool);
  * 0 -> no suitable worker found
  */
 int find_best_worker(struct WorkerPool *pool,
+                     struct WorkerRegistry *registry,
                      struct Task *task,
                      struct Worker **selected_worker);
 
