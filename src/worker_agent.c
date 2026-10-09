@@ -7,146 +7,79 @@
 
 #define RUNTIME_ADDRESS "127.0.0.1"
 #define HEARTBEAT_INTERVAL_SECONDS 3
+#define RETRY_INTERVAL_SECONDS 3
 
 int main(int argc, char *argv[])
 {
-    /*
-     * Worker ID is provided through
-     * the command line.
-     *
-     * Example:
-     *
-     * ./worker_agent 1
-     */
-    if (argc != 2)
-    {
-        printf(
-            "Usage: %s <worker_id>\n",
-            argv[0]
-        );
-
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <worker_id>\n", argv[0]);
         return 1;
     }
 
-    int worker_id = atoi(argv[1]);
+    char *end = NULL;
+    long parsed_id = strtol(argv[1], &end, 10);
 
-    if (worker_id <= 0)
-    {
-        printf(
-            "Worker ID must be greater than 0.\n"
-        );
-
+    if (end == argv[1] || *end != '\0' ||
+        parsed_id <= 0 || parsed_id > 2147483647L) {
+        fprintf(stderr, "Worker ID must be a positive integer.\n");
         return 1;
     }
 
-    /*
-     * Create and initialize the worker.
-     */
     struct Worker worker;
 
-    if (!initialize_worker(
-            &worker,
-            worker_id))
-    {
-        printf(
-            "Failed to initialize worker.\n"
-        );
-
+    if (!initialize_worker(&worker, (int)parsed_id)) {
+        fprintf(stderr, "Failed to initialize worker.\n");
         return 1;
     }
 
-    printf("\n");
-    printf("========================================\n");
+    printf("\n========================================\n");
     printf("             WORKER AGENT\n");
     printf("========================================\n");
-
-    printf(
-        "Worker ID        : %d\n",
-        worker.id
-    );
-
-    printf(
-        "Total CPU        : %.2f%%\n",
-        worker.resources.total_cpu_percent
-    );
-
-    printf(
-        "Available CPU    : %.2f%%\n",
-        worker.resources.available_cpu_percent
-    );
-
-    printf(
-        "Total Memory     : %ld MB\n",
-        worker.resources.total_memory_mb
-    );
-
-    printf(
-        "Available Memory : %ld MB\n",
-        worker.resources.available_memory_mb
-    );
-
-    printf(
-        "Status           : STARTING\n"
-    );
-
+    printf("Worker ID        : %d\n", worker.id);
+    printf("Total CPU        : %.2f%%\n",
+           worker.resources.total_cpu_percent);
+    printf("Available CPU    : %.2f%%\n",
+           worker.resources.available_cpu_percent);
+    printf("Total Memory     : %ld MB\n",
+           worker.resources.total_memory_mb);
+    printf("Available Memory : %ld MB\n",
+           worker.resources.available_memory_mb);
     printf("========================================\n");
 
-    /*
-     * Register the worker with the
-     * runtime coordinator.
-     */
-    printf(
-        "Registering worker with runtime...\n"
-    );
+    int registered = 0;
 
-    if (!register_worker_with_runtime(
-            &worker,
-            RUNTIME_ADDRESS))
-    {
-        printf(
-            "Worker registration failed.\n"
-        );
+    while (1) {
+        if (!registered) {
+            printf("Registering worker %d with runtime...\n",
+                   worker.id);
+            fflush(stdout);
 
-        return 1;
-    }
-
-    printf(
-        "Worker status: ACTIVE\n"
-    );
-
-    /*
-     * ------------------------------------------------
-     * Heartbeat loop
-     * ------------------------------------------------
-     *
-     * The worker periodically tells the
-     * runtime that it is still alive.
-     */
-    while (1)
-    {
-        sleep(
-            HEARTBEAT_INTERVAL_SECONDS
-        );
-
-        printf(
-            "\nSending heartbeat...\n"
-        );
-
-        if (!send_worker_heartbeat(
-                &worker,
-                RUNTIME_ADDRESS))
-        {
-            printf(
-                "Heartbeat failed.\n"
-            );
-
-            /*
-             * For now, keep the worker alive
-             * and try again during the next
-             * heartbeat interval.
-             */
-            continue;
+            if (register_worker_with_runtime(
+                    &worker, RUNTIME_ADDRESS)) {
+                registered = 1;
+                printf("Worker registered. Status: ACTIVE\n");
+            } else {
+                printf("Registration failed. Retrying in %d seconds...\n",
+                       RETRY_INTERVAL_SECONDS);
+                fflush(stdout);
+                sleep(RETRY_INTERVAL_SECONDS);
+                continue;
+            }
         }
+
+        sleep(HEARTBEAT_INTERVAL_SECONDS);
+
+        printf("Sending heartbeat for worker %d...\n", worker.id);
+        fflush(stdout);
+
+        if (send_worker_heartbeat(&worker, RUNTIME_ADDRESS)) {
+            printf("Heartbeat acknowledged.\n");
+        } else {
+            printf("Heartbeat failed. Will attempt registration again.\n");
+            registered = 0;
+        }
+
+        fflush(stdout);
     }
 
     return 0;

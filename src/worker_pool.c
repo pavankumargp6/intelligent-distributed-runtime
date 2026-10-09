@@ -7,8 +7,7 @@
  */
 void initialize_worker_pool(struct WorkerPool *pool)
 {
-    if (pool == NULL)
-    {
+    if (pool == NULL) {
         return;
     }
 
@@ -16,31 +15,39 @@ void initialize_worker_pool(struct WorkerPool *pool)
 }
 
 /*
- * Add a worker to the pool.
+ * Add a worker or update an existing worker
+ * with the same ID.
  */
 int add_worker(struct WorkerPool *pool,
                struct Worker *worker)
 {
-    if (pool == NULL ||
-        worker == NULL)
-    {
+    if (pool == NULL || worker == NULL ||
+        worker->id <= 0) {
         return 0;
     }
 
     /*
-     * Do not add workers beyond
-     * the pool's capacity.
+     * Update an existing worker instead of
+     * creating a duplicate entry.
      */
-    if (pool->count >= WORKER_POOL_CAPACITY)
-    {
+    for (int i = 0; i < pool->count; i++) {
+        if (pool->workers[i].id == worker->id) {
+            pool->workers[i] = *worker;
+            return 1;
+        }
+    }
+
+    /*
+     * Enforce capacity for new workers.
+     */
+    if (pool->count >= WORKER_POOL_CAPACITY) {
         return 0;
     }
 
     /*
-     * Copy the worker into the pool.
+     * Add the new worker.
      */
     pool->workers[pool->count] = *worker;
-
     pool->count++;
 
     return 1;
@@ -52,8 +59,7 @@ int add_worker(struct WorkerPool *pool,
  */
 int get_worker_count(struct WorkerPool *pool)
 {
-    if (pool == NULL)
-    {
+    if (pool == NULL) {
         return 0;
     }
 
@@ -75,60 +81,31 @@ int find_best_worker(struct WorkerPool *pool,
 {
     if (pool == NULL ||
         task == NULL ||
-        selected_worker == NULL)
-    {
+        selected_worker == NULL) {
         return 0;
     }
 
-    /*
-     * No worker has been selected yet.
-     */
     *selected_worker = NULL;
 
-    for (int i = 0; i < pool->count; i++)
-    {
+    for (int i = 0; i < pool->count; i++) {
         struct Worker *worker = &pool->workers[i];
 
-        /*
-         * Check whether this worker has
-         * enough resources for the task.
-         */
         if (!task_fits_worker(
                 task,
-                &worker->resources))
-        {
+                &worker->resources)) {
             continue;
         }
 
-        /*
-         * If this is the first suitable worker,
-         * select it.
-         */
-        if (*selected_worker == NULL)
-        {
+        if (*selected_worker == NULL) {
             *selected_worker = worker;
             continue;
         }
 
-        /*
-         * Prefer the worker with more
-         * available CPU.
-         */
         if (worker->resources.available_cpu_percent >
-            (*selected_worker)
-                ->resources.available_cpu_percent)
-        {
+            (*selected_worker)->resources.available_cpu_percent) {
             *selected_worker = worker;
         }
     }
 
-    /*
-     * No suitable worker was found.
-     */
-    if (*selected_worker == NULL)
-    {
-        return 0;
-    }
-
-    return 1;
+    return *selected_worker != NULL;
 }
