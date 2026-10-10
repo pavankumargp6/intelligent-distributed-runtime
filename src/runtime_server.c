@@ -9,14 +9,15 @@
 #include "runtime_server.h"
 #include "network_protocol.h"
 #include "worker_registration.h"
+#include "coordinator_tasks.h"
+#include "coordinator_handlers.h"
 
 static int handle_worker_message(
     struct Runtime *runtime,
+    struct InFlightTable *table,
     int worker_socket)
 {
-    char message[
-        WORKER_REGISTRATION_MESSAGE_SIZE
-    ];
+    char message[NETWORK_MAX_MESSAGE_SIZE + 1];
 
     /*
      * Receive one framed message.
@@ -84,9 +85,6 @@ static int handle_worker_message(
             worker.resources.total_memory_mb
         );
 
-        /*
-         * Register the worker with the runtime.
-         */
         if (!runtime_register_worker(
                 runtime,
                 &worker))
@@ -107,9 +105,6 @@ static int handle_worker_message(
             "Worker registered with runtime. ✅\n"
         );
 
-        /*
-         * Send registration acknowledgement.
-         */
         if (!send_message(
                 worker_socket,
                 "REGISTER_ACK"))
@@ -161,9 +156,6 @@ static int handle_worker_message(
             worker_id
         );
 
-        /*
-         * Update the worker's last-seen time.
-         */
         if (!update_worker_heartbeat(
                 &runtime->registry,
                 worker_id))
@@ -181,9 +173,6 @@ static int handle_worker_message(
             return 0;
         }
 
-        /*
-         * Send heartbeat acknowledgement.
-         */
         if (!send_message(
                 worker_socket,
                 "HEARTBEAT_ACK"))
@@ -200,6 +189,60 @@ static int handle_worker_message(
         );
 
         return 1;
+    }
+
+    /*
+     * ------------------------------------------------
+     * Client task submission
+     * ------------------------------------------------
+     */
+    if (strncmp(
+            message,
+            "SUBMIT|",
+            7) == 0)
+    {
+        return coordinator_handle_submit(
+            runtime,
+            table,
+            worker_socket,
+            message
+        );
+    }
+
+    /*
+     * ------------------------------------------------
+     * Worker task request
+     * ------------------------------------------------
+     */
+    if (strncmp(
+            message,
+            "TASK_REQUEST|",
+            13) == 0)
+    {
+        return coordinator_handle_task_request(
+            runtime,
+            table,
+            worker_socket,
+            message
+        );
+    }
+
+    /*
+     * ------------------------------------------------
+     * Worker task result
+     * ------------------------------------------------
+     */
+    if (strncmp(
+            message,
+            "TASK_RESULT|",
+            12) == 0)
+    {
+        return coordinator_handle_task_result(
+            runtime,
+            table,
+            worker_socket,
+            message
+        );
     }
 
     /*
@@ -228,6 +271,13 @@ int start_runtime_server(
     }
 
     /*
+     * In-flight task table. Single-threaded server,
+     * so no locking is required yet.
+     */
+    struct InFlightTable in_flight;
+    coordinator_tasks_init(&in_flight);
+
+    /*
      * Create TCP socket.
      */
     int server_socket =
@@ -239,10 +289,6 @@ int start_runtime_server(
         return 0;
     }
 
-    /*
-     * Allow the port to be reused when
-     * the coordinator is restarted.
-     */
     int reuse = 1;
 
     if (setsockopt(
@@ -257,9 +303,6 @@ int start_runtime_server(
         return 0;
     }
 
-    /*
-     * Configure server address.
-     */
     struct sockaddr_in server_address = {0};
 
     server_address.sin_family = AF_INET;
@@ -270,9 +313,6 @@ int start_runtime_server(
     server_address.sin_port =
         htons(port);
 
-    /*
-     * Bind socket to the requested port.
-     */
     if (bind(
             server_socket,
             (struct sockaddr *)&server_address,
@@ -283,9 +323,6 @@ int start_runtime_server(
         return 0;
     }
 
-    /*
-     * Start listening for workers.
-     */
     if (listen(server_socket, 16) < 0)
     {
         perror("listen");
@@ -309,36 +346,16 @@ int start_runtime_server(
 
     printf("========================================\n");
 
-    /*
-     * Configure poll().
-     *
-     * We monitor the server socket for
-     * incoming worker connections.
-     */
     struct pollfd server_poll;
 
     server_poll.fd = server_socket;
     server_poll.events = POLLIN;
     server_poll.revents = 0;
 
-    /*
-     * Check worker liveness every second.
-     */
     const int poll_timeout_ms = 1000;
 
-    /*
-     * ------------------------------------------------
-     * Event loop
-     * ------------------------------------------------
-     */
     while (1)
     {
-        /*
-         * Wait for either:
-         *
-         * 1. A new worker connection
-         * 2. The one-second timeout
-         */
         int poll_result =
             poll(
                 &server_poll,
@@ -352,9 +369,6 @@ int start_runtime_server(
             continue;
         }
 
-        /*
-         * A connection arrived.
-         */
         if (poll_result > 0 &&
             (server_poll.revents & POLLIN))
         {
@@ -377,30 +391,19 @@ int start_runtime_server(
             else
             {
                 printf(
-                    "\nWorker connection accepted.\n"
+                    "\nConnection accepted.\n"
                 );
 
-                /*
-                 * Process one request.
-                 */
                 handle_worker_message(
                     runtime,
+                    &in_flight,
                     worker_socket
                 );
 
-                /*
-                 * Each connection currently
-                 * represents one request.
-                 */
                 close(worker_socket);
             }
         }
 
-        /*
-         * The poll timeout lets us perform
-         * failure detection even when there
-         * are no incoming connections.
-         */
         int stale_workers =
             mark_stale_workers(
                 &runtime->registry

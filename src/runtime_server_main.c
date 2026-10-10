@@ -7,6 +7,11 @@
 
 int main(void)
 {
+    /*
+     * Force line-buffered stdout so redirected logs are
+     * flushed promptly and survive SIGTERM.
+     */
+    setvbuf(stdout, NULL, _IOLBF, 0);
     struct TaskManager task_manager;
     struct WorkerPool worker_pool;
     struct Scheduler scheduler;
