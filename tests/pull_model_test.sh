@@ -76,6 +76,7 @@ gcc -Wall -Wextra \
     src/process_info.c src/cpu_monitor.c src/task_executor.c src/task_metrics.c \
     src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
     src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
+    src/connection_pool.c \
     -o "$COORD_BIN" || exit 1
 
 echo "===== Building worker ====="
