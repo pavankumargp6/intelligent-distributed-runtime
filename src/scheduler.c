@@ -74,3 +74,59 @@ int schedule_next_task(struct Scheduler *scheduler,
      */
     return 1;
 }
+
+int schedule_next_task_for_worker(struct Scheduler *scheduler,
+                                  struct Task *task,
+                                  int worker_id,
+                                  struct Worker **selected_worker)
+{
+    if (scheduler == NULL ||
+        scheduler->manager == NULL ||
+        scheduler->worker_pool == NULL ||
+        scheduler->registry == NULL ||
+        task == NULL ||
+        selected_worker == NULL ||
+        worker_id <= 0)
+    {
+        return 0;
+    }
+
+    *selected_worker = NULL;
+
+    struct Worker *asking = NULL;
+
+    for (int i = 0; i < scheduler->worker_pool->count; i++)
+    {
+        if (scheduler->worker_pool->workers[i].id == worker_id)
+        {
+            asking = &scheduler->worker_pool->workers[i];
+            break;
+        }
+    }
+
+    if (asking == NULL)
+    {
+        return 0;
+    }
+
+    if (!is_worker_live(scheduler->registry, worker_id))
+    {
+        return 0;
+    }
+
+    if (!get_next_task(scheduler->manager, task))
+    {
+        return 0;
+    }
+
+    if (!task_fits_worker(task, &asking->resources))
+    {
+        submit_task(scheduler->manager, task);
+        return 0;
+    }
+
+    task->assigned_worker_id = asking->id;
+    *selected_worker = asking;
+
+    return 1;
+}

@@ -218,7 +218,8 @@ int coordinator_handle_task_request(struct Runtime *runtime,
 
     long requesting_worker_id = 0;
 
-    if (!wire_read_int(&cursor, &requesting_worker_id))
+    if (!wire_read_int(&cursor, &requesting_worker_id) ||
+        requesting_worker_id <= 0)
     {
         send_message(worker_socket, "NO_TASK");
         return 0;
@@ -227,33 +228,12 @@ int coordinator_handle_task_request(struct Runtime *runtime,
     struct Task task;
     struct Worker *selected = NULL;
 
-    if (!schedule_next_task(runtime->scheduler, &task, &selected) ||
+    if (!schedule_next_task_for_worker(runtime->scheduler,
+                                       &task,
+                                       (int)requesting_worker_id,
+                                       &selected) ||
         selected == NULL)
     {
-        send_message(worker_socket, "NO_TASK");
-        return 1;
-    }
-
-    if (!is_worker_live(&runtime->registry, selected->id))
-    {
-        printf("Scheduler picked worker %d, but it is not live; requeueing task %d.\n",
-               selected->id,
-               task.id);
-
-        task.assigned_worker_id = -1;
-        submit_task(runtime->task_manager, &task);
-        send_message(worker_socket, "NO_TASK");
-        return 1;
-    }
-
-    if (selected->id != (int)requesting_worker_id)
-    {
-        printf("Scheduler picked worker %d, but %ld asked; requeueing task %d.\n",
-               selected->id,
-               requesting_worker_id,
-               task.id);
-
-        submit_task(runtime->task_manager, &task);
         send_message(worker_socket, "NO_TASK");
         return 1;
     }
