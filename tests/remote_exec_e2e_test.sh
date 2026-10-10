@@ -13,11 +13,24 @@
 # Exit 0 on PASS, nonzero on FAIL.
 
 set -u
+COORD_PID=""
+WORKER_PID=""
+
+cleanup() {
+    [ -n "$WORKER_PID" ] && kill "$WORKER_PID" 2>/dev/null
+    [ -n "$COORD_PID" ] && kill "$COORD_PID" 2>/dev/null
+    true
+}
+trap cleanup EXIT
+
 cd "$(dirname "$0")/.."
 
 COORD_BIN=/tmp/idr_coord_e2e
 WORKER_BIN=/tmp/idr_worker_e2e
 CLIENT_BIN=/tmp/idr_client_e2e
+
+QUERY_BIN=/tmp/idr_query_e2e
+QUERY_LOG=/tmp/idr_query_e2e.log
 
 COORD_LOG=/tmp/idr_coord_e2e.log
 WORKER_LOG=/tmp/idr_worker_e2e.log
@@ -42,6 +55,11 @@ gcc -Wall -Wextra -Isrc \
     -o "$WORKER_BIN" || exit 1
 
 echo "===== Building client ====="
+
+echo "===== Building query client ====="
+gcc -Wall -Wextra -Isrc \
+    tests/client_query.c src/network_protocol.c \
+    -o "$QUERY_BIN" || exit 1
 gcc -Wall -Wextra -Isrc \
     tests/client_submit.c src/network_protocol.c src/wire_fields.c \
     -o "$CLIENT_BIN" || exit 1
@@ -77,6 +95,20 @@ for i in $(seq 1 15); do
     fi
     sleep 1
 done
+
+echo "===== Querying task 1 ====="
+"$QUERY_BIN" 1 | tee "$QUERY_LOG"
+QUERY_RC=${PIPESTATUS[0]}
+
+if ! grep -q "QUERY_RESULT|1|1|0|2" "$QUERY_LOG"; then
+    echo "===== E2E test: FAIL (query did not return expected result) ====="
+    exit 1
+fi
+
+if [ "$QUERY_RC" -ne 0 ]; then
+    echo "===== E2E test: FAIL (query client exit $QUERY_RC) ====="
+    exit 1
+fi
 
 kill "$WORKER_PID" 2>/dev/null
 kill "$COORD_PID" 2>/dev/null

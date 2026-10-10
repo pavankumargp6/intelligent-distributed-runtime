@@ -40,4 +40,20 @@ int coordinator_handle_task_result(struct Runtime *runtime,
                                    int worker_socket,
                                    const char *message);
 
+/*
+ * Handle a client QUERY message:
+ *
+ *   QUERY|<task_id>
+ *
+ * Replies one of:
+ *
+ *   QUERY_RESULT|<task_id>|<worker_id>|<exit_status>|<state>
+ *   QUERY_PENDING|<task_id>
+ *   QUERY_UNKNOWN|<task_id>
+ */
+int coordinator_handle_query(struct Runtime *runtime,
+                             struct InFlightTable *table,
+                             int client_socket,
+                             const char *message);
+
 #endif

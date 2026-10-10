@@ -246,6 +246,24 @@ static int handle_worker_message(
     }
 
     /*
+     * ------------------------------------------------
+     * Client task query
+     * ------------------------------------------------
+     */
+    if (strncmp(
+            message,
+            "QUERY|",
+            6) == 0)
+    {
+        return coordinator_handle_query(
+            runtime,
+            table,
+            worker_socket,
+            message
+        );
+    }
+
+    /*
      * Unknown message.
      */
     printf(

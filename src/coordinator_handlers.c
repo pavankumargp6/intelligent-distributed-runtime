@@ -8,16 +8,6 @@
 #include "task_manager.h"
 #include "runtime_stats.h"
 
-/*
- * Parse a SUBMIT message body into a Task.
- *
- * Format (after the "SUBMIT|" prefix):
- *
- *   <cmd_len>:<cmd>|<argc>|<a1_len>:<a1>|...
- *
- * The caller is responsible for assigning a task ID
- * and for setting the initial state.
- */
 static int parse_submit(const char *message,
                         struct Task *task)
 {
@@ -86,15 +76,6 @@ static int parse_submit(const char *message,
     return 1;
 }
 
-/*
- * Build a TASK_ASSIGN message for the given task.
- *
- * Format:
- *
- *   TASK_ASSIGN|<id>|<cmd_len>:<cmd>|<argc>|<a1>|...
- *
- * Returns 1 on success.
- */
 static int build_task_assign(const struct Task *task,
                              char *buffer,
                              size_t buffer_size)
@@ -252,12 +233,6 @@ int coordinator_handle_task_request(struct Runtime *runtime,
         return 1;
     }
 
-    /*
-     * Known limitation for this increment:
-     * schedule_next_task picks the best worker globally,
-     * not the worker that asked. If they differ, we
-     * requeue the task and let the right worker ask next.
-     */
     if (selected->id != (int)requesting_worker_id)
     {
         printf("Scheduler picked worker %d, but %ld asked; requeueing task %d.\n",
@@ -343,15 +318,18 @@ int coordinator_handle_task_result(struct Runtime *runtime,
                task_id,
                worker_id);
 
-        /*
-         * Still ack so the worker does not spin on retry.
-         */
         send_message(worker_socket, "TASK_RESULT_ACK");
         return 0;
     }
 
     task.exit_status = exit_status;
     task.state = (enum TaskState)state;
+
+    coordinator_record_completed(table,
+                                 task_id,
+                                 worker_id,
+                                 exit_status,
+                                 state);
 
     printf("Result: task=%d worker=%d exit=%d state=%d\n",
            task_id,
@@ -372,5 +350,90 @@ int coordinator_handle_task_result(struct Runtime *runtime,
 
     send_message(worker_socket, "TASK_RESULT_ACK");
 
+    return 1;
+}
+
+int coordinator_handle_query(struct Runtime *runtime,
+                             struct InFlightTable *table,
+                             int client_socket,
+                             const char *message)
+{
+    (void)runtime;
+
+    if (table == NULL || message == NULL)
+    {
+        return 0;
+    }
+
+    const char *prefix = "QUERY|";
+    size_t prefix_length = strlen(prefix);
+
+    if (strncmp(message, prefix, prefix_length) != 0)
+    {
+        send_message(client_socket, "QUERY_UNKNOWN|-1");
+        return 0;
+    }
+
+    const char *cursor = message + prefix_length;
+
+    long task_id = 0;
+
+    if (!wire_read_int(&cursor, &task_id) || task_id <= 0)
+    {
+        send_message(client_socket, "QUERY_UNKNOWN|-1");
+        return 0;
+    }
+
+    char response[128];
+    int n;
+
+    if (coordinator_is_inflight(table, (int)task_id))
+    {
+        n = snprintf(response,
+                     sizeof(response),
+                     "QUERY_PENDING|%ld",
+                     task_id);
+        if (n <= 0 || (size_t)n >= sizeof(response))
+        {
+            return 0;
+        }
+        send_message(client_socket, response);
+        return 1;
+    }
+
+    int worker_id = -1;
+    int exit_status = -1;
+    int state = -1;
+
+    if (coordinator_lookup_completed(table,
+                                     (int)task_id,
+                                     &worker_id,
+                                     &exit_status,
+                                     &state))
+    {
+        n = snprintf(response,
+                     sizeof(response),
+                     "QUERY_RESULT|%ld|%d|%d|%d",
+                     task_id,
+                     worker_id,
+                     exit_status,
+                     state);
+        if (n <= 0 || (size_t)n >= sizeof(response))
+        {
+            return 0;
+        }
+        send_message(client_socket, response);
+        return 1;
+    }
+
+    n = snprintf(response,
+                 sizeof(response),
+                 "QUERY_UNKNOWN|%ld",
+                 task_id);
+    if (n <= 0 || (size_t)n >= sizeof(response))
+    {
+        return 0;
+    }
+    send_message(client_socket, response);
     return 1;
 }
