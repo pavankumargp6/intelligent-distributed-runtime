@@ -10,3 +10,10 @@ client_query
 *~
 .DS_Store
 # (paste any lost entries here)
+
+# Personal experiment binaries (not part of IDR)
+cpu_test
+digit_test
+proc_list
+process_manager
+process_monitor
