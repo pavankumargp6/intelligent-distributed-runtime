@@ -434,6 +434,19 @@ int start_runtime_server(
                 stale_workers
             );
         }
+
+        int reaped = coordinator_reap_dead_worker_tasks(
+            runtime,
+            &in_flight
+        );
+
+        if (reaped > 0)
+        {
+            printf(
+                "Reaped in-flight tasks from unavailable workers: %d\n",
+                reaped
+            );
+        }
     }
 
     close(server_socket);

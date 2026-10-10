@@ -7,6 +7,7 @@
 #include "scheduler.h"
 #include "task_manager.h"
 #include "runtime_stats.h"
+#include "worker_registry.h"
 
 static int parse_submit(const char *message,
                         struct Task *task)
@@ -233,6 +234,18 @@ int coordinator_handle_task_request(struct Runtime *runtime,
         return 1;
     }
 
+    if (!is_worker_live(&runtime->registry, selected->id))
+    {
+        printf("Scheduler picked worker %d, but it is not live; requeueing task %d.\n",
+               selected->id,
+               task.id);
+
+        task.assigned_worker_id = -1;
+        submit_task(runtime->task_manager, &task);
+        send_message(worker_socket, "NO_TASK");
+        return 1;
+    }
+
     if (selected->id != (int)requesting_worker_id)
     {
         printf("Scheduler picked worker %d, but %ld asked; requeueing task %d.\n",
@@ -436,4 +449,59 @@ int coordinator_handle_query(struct Runtime *runtime,
     }
     send_message(client_socket, response);
     return 1;
+}
+
+int coordinator_reap_dead_worker_tasks(struct Runtime *runtime,
+                                       struct InFlightTable *table)
+{
+    if (runtime == NULL || table == NULL)
+    {
+        return 0;
+    }
+
+    int reaped = 0;
+
+    int i;
+    for (i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    {
+        if (!table->entries[i].in_use)
+        {
+            continue;
+        }
+
+        int worker_id = table->entries[i].worker_id;
+        int task_id = table->entries[i].task_id;
+
+        if (is_worker_live(&runtime->registry, worker_id))
+        {
+            continue;
+        }
+
+        struct Task task;
+        int reported_worker = -1;
+
+        if (!coordinator_take_inflight(table,
+                                       task_id,
+                                       &task,
+                                       &reported_worker))
+        {
+            continue;
+        }
+
+        coordinator_record_completed(table,
+                                     task_id,
+                                     reported_worker,
+                                     -1,
+                                     (int)TASK_FAILED);
+
+        record_task_failed(&runtime->stats);
+
+        printf("Reaped in-flight task %d: worker %d not live.\n",
+               task_id,
+               reported_worker);
+
+        reaped++;
+    }
+
+    return reaped;
 }

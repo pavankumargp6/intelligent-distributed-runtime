@@ -104,4 +104,15 @@ int get_registered_worker_count(
     struct WorkerRegistry *registry
 );
 
+
+/*
+ * Check whether a worker is currently live.
+ *
+ * Returns 1 if the worker exists and is
+ * WORKER_ACTIVE. Returns 0 otherwise.
+ */
+int is_worker_live(
+    struct WorkerRegistry *registry,
+    int worker_id
+);
 #endif

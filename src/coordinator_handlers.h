@@ -56,4 +56,18 @@ int coordinator_handle_query(struct Runtime *runtime,
                              int client_socket,
                              const char *message);
 
+
+/*
+ * Reap in-flight tasks whose assigned worker is no longer live.
+ *
+ * Called from the coordinator poll tick, after
+ * mark_stale_workers, so a worker going stale causes its
+ * dispatched-but-unreported tasks to be recorded as
+ * TASK_FAILED. No retries: a task with side effects must
+ * not be silently re-executed.
+ *
+ * Returns the number of tasks reaped.
+ */
+int coordinator_reap_dead_worker_tasks(struct Runtime *runtime,
+                                       struct InFlightTable *table);
 #endif

@@ -131,3 +131,20 @@ int get_registered_worker_count(
 
     return registry->count;
 }
+
+int is_worker_live(
+    struct WorkerRegistry *registry,
+    int worker_id)
+{
+    if (registry == NULL || worker_id <= 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < registry->count; i++) {
+        if (registry->workers[i].worker.id == worker_id) {
+            return registry->workers[i].status == WORKER_ACTIVE ? 1 : 0;
+        }
+    }
+
+    return 0;
+}
