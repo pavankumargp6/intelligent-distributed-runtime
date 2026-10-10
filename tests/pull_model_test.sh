@@ -31,14 +31,29 @@
 #   - the coordinator log contains no "Scheduler picked worker" line
 
 set -u
+
+if ss -ltn 2>/dev/null | grep -q ":5001 "; then
+    echo "FAIL: port 5001 already in use. Kill leftovers first:"
+    echo "  pkill -9 -f 'idr_coord|idr_worker|runtime_server|worker_agent'"
+    exit 1
+fi
 COORD_PID=""
 W1_PID=""
 W2_PID=""
 
 cleanup() {
-    [ -n "$W1_PID" ] && kill -KILL "$W1_PID" 2>/dev/null
-    [ -n "$W2_PID" ] && kill -KILL "$W2_PID" 2>/dev/null
-    [ -n "$COORD_PID" ] && kill -KILL "$COORD_PID" 2>/dev/null
+    if [ -n "$W1_PID" ]; then
+        kill -KILL "$W1_PID" 2>/dev/null
+        wait "$W1_PID" 2>/dev/null
+    fi
+    if [ -n "$W2_PID" ]; then
+        kill -KILL "$W2_PID" 2>/dev/null
+        wait "$W2_PID" 2>/dev/null
+    fi
+    if [ -n "$COORD_PID" ]; then
+        kill -KILL "$COORD_PID" 2>/dev/null
+        wait "$COORD_PID" 2>/dev/null
+    fi
     true
 }
 trap cleanup EXIT

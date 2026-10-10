@@ -14,12 +14,25 @@
 # disappears mid-execution, and does not silently retry them.
 
 set -u
+
+if ss -ltn 2>/dev/null | grep -q ":5001 "; then
+    echo "FAIL: port 5001 already in use. Kill leftovers first:"
+    echo "  pkill -9 -f 'idr_coord|idr_worker|runtime_server|worker_agent'"
+    exit 1
+fi
 COORD_PID=""
 WORKER_PID=""
 
 cleanup() {
-    [ -n "$WORKER_PID" ] && kill -TERM -"$WORKER_PID" 2>/dev/null
-    [ -n "$COORD_PID" ] && kill "$COORD_PID" 2>/dev/null
+    if [ -n "$WORKER_PID" ]; then
+        kill -KILL -"$WORKER_PID" 2>/dev/null
+        kill -KILL "$WORKER_PID" 2>/dev/null
+        wait "$WORKER_PID" 2>/dev/null
+    fi
+    if [ -n "$COORD_PID" ]; then
+        kill -KILL "$COORD_PID" 2>/dev/null
+        wait "$COORD_PID" 2>/dev/null
+    fi
     true
 }
 trap cleanup EXIT
