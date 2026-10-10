@@ -70,8 +70,8 @@ int start_task(struct Task *task)
 }
 
 /*
- * Start a task only if the scheduler has
- * already assigned it to a worker.
+ * Start a task only if it has been assigned
+ * to a worker and is still in the CREATED state.
  */
 int start_assigned_task(struct Task *task)
 {
@@ -80,19 +80,11 @@ int start_assigned_task(struct Task *task)
         return 0;
     }
 
-    /*
-     * A task must still be in the CREATED
-     * state before execution can begin.
-     */
     if (task->state != TASK_CREATED)
     {
         return 0;
     }
 
-    /*
-     * A task with worker ID -1 has not
-     * been assigned by the scheduler.
-     */
     if (task->assigned_worker_id < 0)
     {
         return 0;
