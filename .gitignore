@@ -9,7 +9,6 @@ client_query
 *.swp
 *~
 .DS_Store
-# (paste any lost entries here)
 
 # Personal experiment binaries (not part of IDR)
 cpu_test
