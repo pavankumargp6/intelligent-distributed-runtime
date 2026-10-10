@@ -1,67 +1,3 @@
-# Intelligent Distributed Runtime
-
-An experimental distributed computing runtime being built from the ground up to explore operating systems, distributed systems, scheduling, resource management, fault tolerance, and intelligent workload placement.
-
-## Project Goal
-
-The goal is to build a runtime that can:
-
-- Discover and monitor system processes and resources
-- Execute computational tasks
-- Schedule tasks across multiple worker nodes
-- Detect worker failures
-- Reassign interrupted tasks
-- Coordinate distributed nodes
-- Experiment with intelligent workload scheduling
-- Provide isolation and resource controls for workloads
-
-The project is being developed incrementally, starting with a local runtime and gradually evolving toward a distributed and adaptive execution system.
-
----
-
-# Current Progress
-
-## Linux Process Layer
-
-- [x] Basic C process manager
-- [x] Process information reader using `/proc`
-- [x] Automatic PID discovery
-- [x] PID detection using `/proc`
-- [x] Git/GitHub project setup
-
-## Resource Monitoring
-
-- [x] Process information collection
-- [x] CPU usage measurement
-- [x] CPU tick monitoring using `/proc/[PID]/stat`
-- [x] Resource snapshot abstraction
-- [x] Process memory and thread monitoring
-
-## Task Execution
-
-- [x] Task abstraction
-- [x] Local task executor using `fork()` and `execvp()`
-- [x] Child process creation
-- [x] Task exit-status handling
-- [x] Task failure detection
-- [x] FIFO task queue
-- [x] Task manager
-- [x] FIFO scheduler
-- [x] End-to-end task execution
-- [x] Concurrent multi-task execution experiment
-
-## Execution Experiment
-
-The runtime was tested by submitting three independent tasks, each requiring approximately three seconds to execute.
-
-All three tasks were started before waiting for their completion.
-
-### Result
-
-```text
-Tasks      : 3
-Elapsed    : 3.01 seconds
-Expected   : approximately 3 seconds
 # Intelligent Distributed Runtime (IDR)
 
 A C/POSIX runtime that distributes tasks from a coordinator to
@@ -73,7 +9,7 @@ TCP protocol.
 
 ## Status
 
-Working end to end:
+Working end to end (all with passing integration tests):
 
 - Client task submission over TCP
 - Coordinator-driven scheduling and dispatch
@@ -81,32 +17,31 @@ Working end to end:
 - Result reporting back to the coordinator
 - Client task query (read-after-write across processes)
 - Worker registration and heartbeat-based liveness detection
-- Fault handling: worker disappearing mid-task is detected and
-  the task is recorded as `TASK_FAILED`
+- Fault handling: a worker disappearing mid-task is detected
+  and the task is recorded as `TASK_FAILED`
 - Pull-model scheduling: task selection is scoped to the worker
   that asked, not to a global-best choice
+- Concurrent connections in the coordinator: a hung client does
+  not block other clients or workers
 
 Not yet implemented:
 
-- Concurrent connections in the coordinator (see *Limitations*)
+- Non-blocking writes with per-connection send buffers
 - Persistence across coordinator restarts
+- Task-runner crash detection when heartbeats continue
 - Authentication or authorization
 - Retry / recovery policies
 
 ## Architecture
 
-    ┌────────────┐          ┌──────────────────────┐          ┌────────────┐
-    │   client   │  SUBMIT  │      coordinator     │  ASSIGN  │   worker   │
-    │            ├─────────►│                      ├─────────►│   agent    │
-    │  submit +  │          │  queue + scheduler   │          │            │
-    │   query    │  QUERY   │  registry + metrics  │  RESULT  │  fork/exec │
-    │            │◄─────────┤                      │◄─────────┤            │
-    └────────────┘          └──────────────────────┘          └────────────┘
-                                    ▲                                ▲
-                                    │                                │
-                                    │ REGISTER / HEARTBEAT /         │
-                                    │ TASK_REQUEST                   │
-                                    └────────────────────────────────┘
+    client  ──SUBMIT──►  coordinator  ──TASK_ASSIGN──►  worker agent
+            ◄──QUERY───  (queue,      ◄──TASK_RESULT──  (fork/exec)
+                         scheduler,
+                         registry,
+                         metrics)
+            ▲                                           ▲
+            │                                           │
+            └─ REGISTER / HEARTBEAT / TASK_REQUEST ──────┘
 
 Every arrow is a length-prefixed TCP message on port 5001.
 
@@ -118,19 +53,19 @@ Payloads are newline-free ASCII. Variable-length string fields
 characters like `|`, spaces, and newlines inside them cannot
 corrupt the message.
 
-| Direction        | Message                                              |
-|------------------|------------------------------------------------------|
-| worker → coord   | `REGISTER|<id>|<cpu>|<mem_mb>`                       |
-| coord → worker   | `REGISTER_ACK` / `REGISTER_REJECT`                   |
-| worker → coord   | `HEARTBEAT|<id>`                                     |
-| coord → worker   | `HEARTBEAT_ACK` / `HEARTBEAT_REJECT`                 |
-| client → coord   | `SUBMIT|<len>:<cmd>|<argc>|<len>:<a1>|...`           |
-| coord → client   | `SUBMIT_ACK|<task_id>` / `SUBMIT_REJECT`             |
-| worker → coord   | `TASK_REQUEST|<worker_id>`                           |
-| coord → worker   | `TASK_ASSIGN|<id>|<len>:<cmd>|<argc>|<a1>|...` / `NO_TASK` |
-| worker → coord   | `TASK_RESULT|<task_id>|<worker_id>|<exit>|<state>`   |
-| coord → worker   | `TASK_RESULT_ACK`                                    |
-| client → coord   | `QUERY|<task_id>`                                    |
+| Direction        | Message                                                       |
+|------------------|---------------------------------------------------------------|
+| worker → coord   | `REGISTER|<id>|<cpu>|<mem_mb>`                                |
+| coord → worker   | `REGISTER_ACK` / `REGISTER_REJECT`                            |
+| worker → coord   | `HEARTBEAT|<id>`                                              |
+| coord → worker   | `HEARTBEAT_ACK` / `HEARTBEAT_REJECT`                          |
+| client → coord   | `SUBMIT|<len>:<cmd>|<argc>|<len>:<a1>|...`                    |
+| coord → client   | `SUBMIT_ACK|<task_id>` / `SUBMIT_REJECT`                      |
+| worker → coord   | `TASK_REQUEST|<worker_id>`                                    |
+| coord → worker   | `TASK_ASSIGN|<id>|<len>:<cmd>|<argc>|<a1>|...` / `NO_TASK`    |
+| worker → coord   | `TASK_RESULT|<task_id>|<worker_id>|<exit>|<state>`            |
+| coord → worker   | `TASK_RESULT_ACK`                                             |
+| client → coord   | `QUERY|<task_id>`                                             |
 | coord → client   | `QUERY_RESULT|<id>|<worker>|<exit>|<state>` / `QUERY_PENDING|<id>` / `QUERY_UNKNOWN|<id>` |
 
 Task state values: `0 = CREATED`, `1 = RUNNING`, `2 = COMPLETED`,
@@ -147,12 +82,169 @@ dependencies beyond libc and POSIX.
 
 ### Coordinator
 
-```bash
-gcc -Wall -Wextra \
-    src/runtime_server_main.c src/runtime_server.c src/runtime.c \
-    src/worker_registry.c src/task_manager.c src/task_queue.c \
-    src/scheduler.c src/worker_pool.c src/worker.c src/worker_resources.c \
-    src/process_info.c src/cpu_monitor.c src/task_executor.c src/task_metrics.c \
-    src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
-    src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
-    -o runtime_server
+    gcc -Wall -Wextra \
+        src/runtime_server_main.c src/runtime_server.c src/runtime.c \
+        src/worker_registry.c src/task_manager.c src/task_queue.c \
+        src/scheduler.c src/worker_pool.c src/worker.c src/worker_resources.c \
+        src/process_info.c src/cpu_monitor.c src/task_executor.c src/task_metrics.c \
+        src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
+        src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
+        src/connection_pool.c \
+        -o runtime_server
+
+### Worker
+
+    gcc -Wall -Wextra -Isrc \
+        src/worker_agent.c src/worker.c src/worker_resources.c \
+        src/process_info.c src/cpu_monitor.c \
+        src/worker_registration.c src/worker_registration_client.c \
+        src/worker_task_client.c src/wire_fields.c \
+        src/task_executor.c src/task_metrics.c src/network_protocol.c \
+        -o worker_agent
+
+### Clients
+
+    gcc -Wall -Wextra -Isrc \
+        tests/client_submit.c src/network_protocol.c src/wire_fields.c \
+        -o client_submit
+
+    gcc -Wall -Wextra -Isrc \
+        tests/client_query.c src/network_protocol.c \
+        -o client_query
+
+## Running
+
+Three terminals (or three hosts — change `RUNTIME_ADDRESS` in the
+worker and client sources):
+
+    # Terminal 1
+    ./runtime_server
+
+    # Terminal 2
+    ./worker_agent 1
+
+    # Terminal 3
+    ./client_submit echo hello world     # Response: SUBMIT_ACK|1
+    ./client_query 1                     # Response: QUERY_RESULT|1|1|0|2
+
+If you submit before any worker is running, the task is queued and
+dispatched when a worker registers.
+
+## Tests
+
+All tests compile their own binaries into `/tmp`, start and tear
+down processes, and exit non-zero on failure.
+
+| Test                        | What it proves                                                     |
+|-----------------------------|--------------------------------------------------------------------|
+| `connection_pool_test.c`    | Incremental framing: partial reads, complete messages, oversize length, peer close, idle expiry. |
+| `worker_remote_exec_test.sh`| Worker-side protocol against a fake coordinator.                   |
+| `remote_exec_e2e_test.sh`   | Full lifecycle: submit → dispatch → execute → report → query.       |
+| `fault_injection_test.sh`   | A worker killed mid-task is detected and its task recorded as `TASK_FAILED`. |
+| `pull_model_test.sh`        | Selection is scoped to the asking worker, not global-best.          |
+| `hung_client_test.sh`       | A stuck client does not block other clients or workers.             |
+
+Run them:
+
+    bash tests/remote_exec_e2e_test.sh
+    bash tests/fault_injection_test.sh
+    bash tests/pull_model_test.sh
+    bash tests/hung_client_test.sh
+
+    gcc -Wall -Wextra -Isrc \
+        tests/connection_pool_test.c src/connection_pool.c src/network_protocol.c \
+        -o /tmp/connection_pool_test && /tmp/connection_pool_test
+
+If a test fails and leaves a coordinator holding port 5001:
+
+    pkill -9 -f 'idr_coord|idr_worker|runtime_server|worker_agent'
+
+## Repository layout
+
+    src/
+      runtime.c/h                 runtime core
+      task.h                      task struct and state enum
+      task_manager.c/h            FIFO wrapper
+      task_queue.c/h              bounded queue (capacity 64)
+      scheduler.c/h               worker selection, global and per-worker
+      worker_pool.c/h             worker collection
+      worker.c/h                  individual worker
+      worker_resources.c/h        CPU/memory accounting
+      process_info.c/h            /proc readers
+      cpu_monitor.c/h             CPU sampling
+      worker_registry.c/h         registration and liveness
+      worker_registration.c/h     REGISTER / HEARTBEAT wire format
+      worker_registration_client.c/h  worker-side registration
+      worker_task_client.c/h      worker-side TASK_REQUEST / TASK_RESULT
+      task_executor.c/h           local fork/execvp and waitpid
+      task_metrics.c/h            per-task timing
+      runtime_stats.c/h           runtime-wide counters
+      network_protocol.c/h        framing
+      wire_fields.c/h             length-prefixed field helpers
+      coordinator_tasks.c/h       in-flight table + completed ring
+      coordinator_handlers.c/h    SUBMIT / TASK_REQUEST / TASK_RESULT / QUERY
+      connection_pool.c/h         concurrent connection handling
+      runtime_server.c/h          poll loop, dispatch, housekeeping
+      runtime_server_main.c       coordinator entry point
+      worker_agent.c              worker entry point
+
+    tests/
+      client_submit.c             SUBMIT client
+      client_query.c              QUERY client
+      hung_client.c               partial-frame client stub
+      fake_coordinator.c          coordinator stub for worker tests
+      connection_pool_test.c      unit test for the connection pool
+      runtime_scheduling_test.c   scheduler regression
+      worker_remote_exec_test.sh
+      remote_exec_e2e_test.sh
+      fault_injection_test.sh
+      pull_model_test.sh
+      hung_client_test.sh
+
+## Limitations
+
+These are real, verified, and not hidden behind optimistic
+language.
+
+- **Single-threaded but I/O-multiplexed.** The coordinator handles
+  many concurrent connections via `poll()`. Reads are
+  non-blocking; writes are still blocking, which is fine for the
+  ~30-byte responses on a low-latency link but would need
+  per-connection send buffers for a slow or lossy network.
+- **No persistence.** In-flight tasks and the completed ring live
+  in memory. A coordinator restart loses both. Completed entries
+  age out after 64 newer completions.
+- **At-most-once dispatch.** The coordinator does not retry a task
+  whose worker died. A task with external side effects must not be
+  silently re-executed without coordination, and there is no such
+  coordination here. When a worker goes silent mid-task, the task
+  is marked `TASK_FAILED` and stays failed.
+- **Task-runner crash without heartbeat loss is not detected.** If
+  the worker's heartbeat continues but its forked task-runner child
+  segfaults, the coordinator will not notice. Detecting this
+  requires per-task timeouts or a worker-side signal, neither of
+  which exists.
+- **No authentication.** Any client that can reach the coordinator
+  port can submit any command. The runtime is designed for trusted
+  networks.
+- **Workers poll; they do not push.** A worker asks for work every
+  ~3 seconds. Dispatch latency is therefore at least the poll
+  interval. Push delivery would require persistent worker
+  connections on the coordinator.
+
+## Roadmap
+
+- **Phase 6 — Observability.** Structured logging, latency metrics
+  (queue wait, dispatch latency, execution time, end-to-end), and
+  a `Makefile` or build script so the README stops asking readers
+  to paste multi-line gcc commands.
+- **Later.** Per-connection worker state so workers don't
+  re-register each poll cycle. Non-blocking writes with
+  per-connection send buffers. Worker-side task-runner crash
+  detection. A dispatch acknowledgement so at-least-once
+  semantics become possible. Client-facing task cancellation.
+  TLS.
+
+## License
+
+All rights reserved by the author.
