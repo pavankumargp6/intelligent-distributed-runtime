@@ -1,6 +1,11 @@
-# Compiled C programs
-digit_test
-proc_list
-process_manager
-process_monitor
-cpu_test
+# Built binaries (from README manual build commands)
+runtime_server
+worker_agent
+client_submit
+client_query
+
+# Editor / OS noise
+*.o
+*.swp
+*~
+.DS_Store
