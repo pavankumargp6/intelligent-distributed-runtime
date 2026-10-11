@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
 #include <sys/types.h>
 
 #include "worker.h"
@@ -10,6 +11,7 @@
 #include "worker_task_client.h"
 #include "task.h"
 #include "task_executor.h"
+#include "log.h"
 
 #define RUNTIME_ADDRESS "127.0.0.1"
 #define HEARTBEAT_INTERVAL_SECONDS 3
@@ -32,43 +34,49 @@ static void run_task_in_child(const struct Worker *worker,
 
     if (!start_task(&task))
     {
-        printf("[task %d] start_task failed.\n", task.id);
-        fflush(stdout);
+        log_error("task_start_failed",
+                  "[task %d] start_task failed.",
+                  task.id);
         _exit(1);
     }
 
     if (!wait_for_task(&task))
     {
-        printf("[task %d] wait_for_task failed.\n", task.id);
-        fflush(stdout);
+        log_error("task_wait_failed",
+                  "[task %d] wait_for_task failed.",
+                  task.id);
         _exit(1);
     }
 
-    printf("[task %d] finished: pid=%d exit_status=%d state=%d\n",
-           task.id,
-           task.pid,
-           task.exit_status,
-           task.state);
-    fflush(stdout);
+    log_info("task_finished",
+             "[task %d] finished: pid=%d exit_status=%d state=%d",
+             task.id,
+             task.pid,
+             task.exit_status,
+             task.state);
 
     if (!send_task_result_to_runtime(worker,
                                      RUNTIME_ADDRESS,
                                      &task))
     {
-        printf("[task %d] could not report result to coordinator.\n",
-               task.id);
-        fflush(stdout);
+        log_error("task_result_report_failed",
+                  "[task %d] could not report result to coordinator.",
+                  task.id);
         _exit(1);
     }
 
-    printf("[task %d] result reported.\n", task.id);
-    fflush(stdout);
+    log_info("task_result_reported",
+             "[task %d] result reported.",
+             task.id);
 
     _exit(0);
 }
 
 int main(int argc, char *argv[])
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    log_init();
+
     if (argc != 2)
     {
         fprintf(stderr, "Usage: %s <worker_id>\n", argv[0]);
@@ -96,7 +104,7 @@ int main(int argc, char *argv[])
 
     if (!initialize_worker(&worker, (int)parsed_id))
     {
-        fprintf(stderr, "Failed to initialize worker.\n");
+        log_error("worker_init_failed", "Failed to initialize worker.");
         return 1;
     }
 
@@ -120,21 +128,22 @@ int main(int argc, char *argv[])
     {
         if (!registered)
         {
-            printf("Registering worker %d with runtime...\n",
-                   worker.id);
-            fflush(stdout);
+            log_info("worker_registering",
+                     "Registering worker %d with runtime...",
+                     worker.id);
 
             if (register_worker_with_runtime(&worker,
                                              RUNTIME_ADDRESS))
             {
                 registered = 1;
-                printf("Worker registered. Status: ACTIVE\n");
+                log_info("worker_registered",
+                         "Worker registered. Status: ACTIVE");
             }
             else
             {
-                printf("Registration failed. Retrying in %d seconds...\n",
-                       RETRY_INTERVAL_SECONDS);
-                fflush(stdout);
+                log_warn("worker_registration_failed",
+                         "Registration failed. Retrying in %d seconds...",
+                         RETRY_INTERVAL_SECONDS);
                 sleep(RETRY_INTERVAL_SECONDS);
                 continue;
             }
@@ -142,19 +151,19 @@ int main(int argc, char *argv[])
 
         sleep(HEARTBEAT_INTERVAL_SECONDS);
 
-        printf("Sending heartbeat for worker %d...\n", worker.id);
-        fflush(stdout);
+        log_debug("heartbeat_sending",
+                  "Sending heartbeat for worker %d...",
+                  worker.id);
 
         if (!send_worker_heartbeat(&worker, RUNTIME_ADDRESS))
         {
-            printf("Heartbeat failed. Will attempt registration again.\n");
-            fflush(stdout);
+            log_warn("heartbeat_failed",
+                     "Heartbeat failed. Will attempt registration again.");
             registered = 0;
             continue;
         }
 
-        printf("Heartbeat acknowledged.\n");
-        fflush(stdout);
+        log_debug("heartbeat_acked", "Heartbeat acknowledged.");
 
         /*
          * Poll the coordinator for work.
@@ -162,37 +171,34 @@ int main(int argc, char *argv[])
         struct Task task;
         int has_task = 0;
 
-        printf("Requesting task from runtime...\n");
-        fflush(stdout);
+        log_debug("task_requesting", "Requesting task from runtime...");
 
         if (!request_task_from_runtime(&worker,
                                        RUNTIME_ADDRESS,
                                        &task,
                                        &has_task))
         {
-            printf("Task request failed.\n");
-            fflush(stdout);
+            log_warn("task_request_failed", "Task request failed.");
             continue;
         }
 
         if (!has_task)
         {
-            printf("No task available.\n");
-            fflush(stdout);
+            log_debug("no_task", "No task available.");
             continue;
         }
 
-        printf("Task received: id=%d command=%s argc=%d\n",
-               task.id,
-               task.command,
-               task.argument_count);
-        fflush(stdout);
+        log_info("task_received",
+                 "Task received: id=%d command=%s argc=%d",
+                 task.id,
+                 task.command,
+                 task.argument_count);
 
         pid_t child = fork();
 
         if (child < 0)
         {
-            perror("fork");
+            log_error("fork_failed", "fork: %s", strerror(errno));
             continue;
         }
 
