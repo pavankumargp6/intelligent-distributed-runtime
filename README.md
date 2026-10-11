@@ -1,5 +1,7 @@
 # Intelligent Distributed Runtime (IDR)
 
+[![CI](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml)
+
 A C/POSIX runtime that distributes tasks from a coordinator to
 worker processes over TCP. A client submits a command, the
 coordinator queues and schedules it, a worker executes it locally,
