@@ -775,3 +775,110 @@ int coordinator_reap_dead_worker_tasks(struct Runtime *runtime,
 
     return reaped;
 }
+
+int coordinator_reap_unaccepted_tasks(struct Runtime *runtime,
+                                      struct InFlightTable *table)
+{
+    if (runtime == NULL || table == NULL)
+    {
+        return 0;
+    }
+
+    time_t now = time(NULL);
+    int reaped = 0;
+
+    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    {
+        if (!table->entries[i].in_use)
+        {
+            continue;
+        }
+
+        if (table->entries[i].accepted)
+        {
+            continue;
+        }
+
+        double age = difftime(now, table->entries[i].dispatched_at);
+
+        if (age <= (double)DISPATCH_TIMEOUT_SECONDS)
+        {
+            continue;
+        }
+
+        int task_id = table->entries[i].task_id;
+        int worker_id = table->entries[i].worker_id;
+
+        struct Task task;
+        int reported_worker = -1;
+
+        if (!coordinator_take_inflight(table,
+                                       task_id,
+                                       &task,
+                                       &reported_worker))
+        {
+            continue;
+        }
+
+        if (task.idempotent)
+        {
+            task.assigned_worker_id = -1;
+            task.state = TASK_CREATED;
+
+            if (submit_task(runtime->task_manager, &task))
+            {
+                log_warn("task_requeued_timeout",
+                         "Requeued idempotent task %d after dispatch "
+                         "timeout (worker %d never accepted)",
+                         task_id,
+                         worker_id);
+            }
+            else
+            {
+                log_error("task_requeue_failed",
+                          "Could not requeue idempotent task %d "
+                          "after dispatch timeout", task_id);
+
+                coordinator_record_completed(table,
+                                             task_id,
+                                             worker_id,
+                                             -1,
+                                             (int)TASK_FAILED);
+                record_task_failed(&runtime->stats);
+            }
+        }
+        else
+        {
+            coordinator_record_completed(table,
+                                         task_id,
+                                         worker_id,
+                                         -1,
+                                         (int)TASK_FAILED);
+            record_task_failed(&runtime->stats);
+
+            char wal_line[128];
+            int n = snprintf(wal_line, sizeof(wal_line),
+                             "RESULT|%d|%d|%d|%d",
+                             task_id,
+                             worker_id,
+                             -1,
+                             (int)TASK_FAILED);
+            if (n > 0 && (size_t)n < sizeof(wal_line))
+            {
+                (void)wal_append(&runtime->wal, wal_line);
+            }
+
+            log_warn("task_failed_timeout",
+                     "Task %d failed: dispatched to worker %d but "
+                     "no TASK_ACCEPT within %d seconds "
+                     "(not idempotent, not retried)",
+                     task_id,
+                     worker_id,
+                     DISPATCH_TIMEOUT_SECONDS);
+        }
+
+        reaped++;
+    }
+
+    return reaped;
+}

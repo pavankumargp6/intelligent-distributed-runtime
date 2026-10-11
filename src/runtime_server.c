@@ -375,6 +375,16 @@ int start_runtime_server(
                      "Reaped in-flight tasks from unavailable workers: %d",
                      reaped);
         }
+
+        int unaccepted = coordinator_reap_unaccepted_tasks(
+            runtime, &in_flight);
+
+        if (unaccepted > 0)
+        {
+            log_info("unaccepted_reaped",
+                     "Reaped in-flight tasks with no TASK_ACCEPT: %d",
+                     unaccepted);
+        }
     }
 
     close(server_socket);

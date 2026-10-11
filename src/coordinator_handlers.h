@@ -19,15 +19,6 @@ int coordinator_handle_task_result(struct Runtime *runtime,
                                    int worker_socket,
                                    const char *message);
 
-/*
- * Handle a TASK_ACCEPT message from a worker.
- *
- *   TASK_ACCEPT|<task_id>
- *
- * Marks the in-flight entry as accepted so the dispatch
- * timeout reaper leaves it alone. Replies TASK_ACCEPT_ACK
- * or TASK_ACCEPT_REJECT.
- */
 int coordinator_handle_task_accept(struct Runtime *runtime,
                                    struct InFlightTable *table,
                                    int worker_socket,
@@ -44,5 +35,18 @@ int coordinator_handle_status(struct Runtime *runtime,
 
 int coordinator_reap_dead_worker_tasks(struct Runtime *runtime,
                                        struct InFlightTable *table);
+
+/*
+ * Reap in-flight tasks that were dispatched but never
+ * accepted within DISPATCH_TIMEOUT_SECONDS.
+ *
+ * Idempotent tasks are re-queued (they will be re-dispatched
+ * when a worker next polls). Non-idempotent tasks are marked
+ * TASK_FAILED — we will not risk duplicate side effects.
+ *
+ * Returns the number of tasks processed (requeued + failed).
+ */
+int coordinator_reap_unaccepted_tasks(struct Runtime *runtime,
+                                      struct InFlightTable *table);
 
 #endif
