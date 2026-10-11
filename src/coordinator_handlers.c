@@ -242,6 +242,13 @@ int coordinator_handle_task_request(struct Runtime *runtime,
         return 1;
     }
 
+    /*
+     * Phase 2b: record the moment the coordinator commits to
+     * dispatching this task. queue_wait_seconds is computed
+     * here from submission_time -> start_time.
+     */
+    record_task_start(&task.metrics);
+
     if (!coordinator_record_inflight(table, &task, selected->id))
     {
         log_warn("inflight_full",
@@ -332,6 +339,14 @@ int coordinator_handle_task_result(struct Runtime *runtime,
     task.exit_status = exit_status;
     task.state = (enum TaskState)state;
 
+    /*
+     * Phase 2b: record the moment the coordinator received the
+     * result. execution_seconds is dispatch -> result received,
+     * which includes the network round trip and worker
+     * fork/exec, not pure task execution time.
+     */
+    record_task_completion(&task.metrics);
+
     coordinator_record_completed(table,
                                  task_id,
                                  worker_id,
@@ -344,6 +359,19 @@ int coordinator_handle_task_result(struct Runtime *runtime,
              worker_id,
              exit_status,
              state);
+
+    log_info("task_latency",
+             "task_id=%d worker_id=%d exit=%d state=%d "
+             "queue_wait_ms=%.0f dispatch_to_result_ms=%.0f "
+             "end_to_end_ms=%.0f",
+             task_id,
+             worker_id,
+             exit_status,
+             state,
+             task.metrics.queue_wait_seconds * 1000.0,
+             task.metrics.execution_seconds * 1000.0,
+             (task.metrics.queue_wait_seconds
+              + task.metrics.execution_seconds) * 1000.0);
 
     if (task.state == TASK_COMPLETED)
     {

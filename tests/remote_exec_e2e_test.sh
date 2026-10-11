@@ -9,6 +9,7 @@
 #   4. Start the real worker agent.
 #   5. Wait for the coordinator to log the result.
 #   6. Verify task id=1, worker id=1, exit=0, state=2.
+#   7. Verify a task_latency event was emitted.
 #
 # Exit 0 on PASS, nonzero on FAIL.
 
@@ -71,14 +72,14 @@ gcc -Wall -Wextra -Isrc \
     -o "$WORKER_BIN" || exit 1
 
 echo "===== Building client ====="
+gcc -Wall -Wextra -Isrc \
+    tests/client_submit.c src/network_protocol.c src/wire_fields.c \
+    -o "$CLIENT_BIN" || exit 1
 
 echo "===== Building query client ====="
 gcc -Wall -Wextra -Isrc \
     tests/client_query.c src/network_protocol.c \
     -o "$QUERY_BIN" || exit 1
-gcc -Wall -Wextra -Isrc \
-    tests/client_submit.c src/network_protocol.c src/wire_fields.c \
-    -o "$CLIENT_BIN" || exit 1
 
 : > "$COORD_LOG"
 : > "$WORKER_LOG"
@@ -146,6 +147,19 @@ fi
 
 if [ "$FOUND" -eq 0 ]; then
     echo "===== E2E test: FAIL (no result before timeout) ====="
+    exit 1
+fi
+
+# Phase 2b: verify a per-task latency event was emitted with
+# the fields we expect.
+if ! grep -q '"event":"task_latency"' "$COORD_LOG"; then
+    echo "===== E2E test: FAIL (no task_latency event in coordinator log) ====="
+    exit 1
+fi
+
+if ! grep -q 'queue_wait_ms=' "$COORD_LOG" \
+   || ! grep -q 'end_to_end_ms=' "$COORD_LOG"; then
+    echo "===== E2E test: FAIL (task_latency missing expected fields) ====="
     exit 1
 fi
 
