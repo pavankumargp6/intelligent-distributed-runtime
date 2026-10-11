@@ -10,6 +10,7 @@ COMMON_SRCS = \
 
 COORDINATOR_SRCS = \
     src/log.c \
+    src/wal.c \
     $(COMMON_SRCS) \
     src/runtime_server_main.c \
     src/runtime_server.c \
@@ -141,6 +142,9 @@ test:
 	@echo ""
 	@echo "===== log_test.sh ====="
 	bash tests/log_test.sh
+	@echo ""
+	@echo "===== wal_test.sh ====="
+	bash tests/wal_test.sh
 	@echo ""
 	@echo "===== remote_exec_e2e_test.sh ====="
 	bash tests/remote_exec_e2e_test.sh
