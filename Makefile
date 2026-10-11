@@ -4,10 +4,6 @@ CC       ?= gcc
 CFLAGS   ?= -Wall -Wextra -Isrc
 BUILD    ?= build
 
-# ---------------------------------------------------------------------------
-# Source sets
-# ---------------------------------------------------------------------------
-
 COMMON_SRCS = \
     src/network_protocol.c \
     src/wire_fields.c
@@ -57,43 +53,38 @@ CLIENT_QUERY_SRCS = \
     src/network_protocol.c \
     tests/client_query.c
 
-# ---------------------------------------------------------------------------
-# Binaries
-# ---------------------------------------------------------------------------
+CLIENT_STATUS_SRCS = \
+    src/network_protocol.c \
+    tests/client_status.c
 
-COORDINATOR_BIN = $(BUILD)/runtime_server
-WORKER_BIN      = $(BUILD)/worker_agent
-CLIENT_SUB_BIN  = $(BUILD)/client_submit
-CLIENT_QRY_BIN  = $(BUILD)/client_query
+COORDINATOR_BIN   = $(BUILD)/runtime_server
+WORKER_BIN        = $(BUILD)/worker_agent
+CLIENT_SUB_BIN    = $(BUILD)/client_submit
+CLIENT_QRY_BIN    = $(BUILD)/client_query
+CLIENT_STATUS_BIN = $(BUILD)/client_status
 
-# ASAN builds go into a separate directory so both can coexist.
 ASAN_BUILD  = $(BUILD)/asan
 ASAN_CFLAGS = $(CFLAGS) -g -O1 \
               -fsanitize=address,undefined \
               -fno-omit-frame-pointer
 
-ASAN_COORDINATOR = $(ASAN_BUILD)/runtime_server
-ASAN_WORKER      = $(ASAN_BUILD)/worker_agent
-ASAN_CLIENT_SUB  = $(ASAN_BUILD)/client_submit
-ASAN_CLIENT_QRY  = $(ASAN_BUILD)/client_query
-
-# ---------------------------------------------------------------------------
-# Phony targets
-# ---------------------------------------------------------------------------
+ASAN_COORDINATOR   = $(ASAN_BUILD)/runtime_server
+ASAN_WORKER        = $(ASAN_BUILD)/worker_agent
+ASAN_CLIENT_SUB    = $(ASAN_BUILD)/client_submit
+ASAN_CLIENT_QRY    = $(ASAN_BUILD)/client_query
+ASAN_CLIENT_STATUS = $(ASAN_BUILD)/client_status
 
 .PHONY: all asan test clean help
 
-all: $(COORDINATOR_BIN) $(WORKER_BIN) $(CLIENT_SUB_BIN) $(CLIENT_QRY_BIN)
+all: $(COORDINATOR_BIN) $(WORKER_BIN) \
+     $(CLIENT_SUB_BIN) $(CLIENT_QRY_BIN) $(CLIENT_STATUS_BIN)
 	@echo ""
 	@echo "Build complete:"
 	@echo "  $(COORDINATOR_BIN)"
 	@echo "  $(WORKER_BIN)"
 	@echo "  $(CLIENT_SUB_BIN)"
 	@echo "  $(CLIENT_QRY_BIN)"
-
-# ---------------------------------------------------------------------------
-# Regular binaries
-# ---------------------------------------------------------------------------
+	@echo "  $(CLIENT_STATUS_BIN)"
 
 $(COORDINATOR_BIN): $(COORDINATOR_SRCS)
 	@mkdir -p $(BUILD)
@@ -111,14 +102,14 @@ $(CLIENT_QRY_BIN): $(CLIENT_QUERY_SRCS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $^ -o $@
 
-# ---------------------------------------------------------------------------
-# ASAN binaries
-# ---------------------------------------------------------------------------
+$(CLIENT_STATUS_BIN): $(CLIENT_STATUS_SRCS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $^ -o $@
 
-asan: $(ASAN_COORDINATOR) $(ASAN_WORKER) $(ASAN_CLIENT_SUB) $(ASAN_CLIENT_QRY)
+asan: $(ASAN_COORDINATOR) $(ASAN_WORKER) \
+      $(ASAN_CLIENT_SUB) $(ASAN_CLIENT_QRY) $(ASAN_CLIENT_STATUS)
 	@echo ""
 	@echo "ASAN build complete: $(ASAN_BUILD)/"
-	@echo "Run these binaries directly; sanitizer errors print to stderr."
 
 $(ASAN_COORDINATOR): $(COORDINATOR_SRCS)
 	@mkdir -p $(ASAN_BUILD)
@@ -136,9 +127,9 @@ $(ASAN_CLIENT_QRY): $(CLIENT_QUERY_SRCS)
 	@mkdir -p $(ASAN_BUILD)
 	$(CC) $(ASAN_CFLAGS) $^ -o $@
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+$(ASAN_CLIENT_STATUS): $(CLIENT_STATUS_SRCS)
+	@mkdir -p $(ASAN_BUILD)
+	$(CC) $(ASAN_CFLAGS) $^ -o $@
 
 test:
 	@mkdir -p $(BUILD)
@@ -163,22 +154,17 @@ test:
 	@echo "===== hung_client_test.sh ====="
 	bash tests/hung_client_test.sh
 	@echo ""
+	@echo "===== status_test.sh ====="
+	bash tests/status_test.sh
+	@echo ""
 	@echo "All tests passed."
-
-# ---------------------------------------------------------------------------
-# Cleanup
-# ---------------------------------------------------------------------------
 
 clean:
 	rm -rf $(BUILD)
 
-# ---------------------------------------------------------------------------
-# Help
-# ---------------------------------------------------------------------------
-
 help:
 	@echo "Targets:"
-	@echo "  make         build coordinator, worker, and clients into $(BUILD)/"
+	@echo "  make         build coordinator, worker, and three clients into $(BUILD)/"
 	@echo "  make asan    build with AddressSanitizer + UBSan into $(ASAN_BUILD)/"
 	@echo "  make test    run unit and integration tests"
 	@echo "  make clean   remove $(BUILD)/"

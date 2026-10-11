@@ -242,11 +242,6 @@ int coordinator_handle_task_request(struct Runtime *runtime,
         return 1;
     }
 
-    /*
-     * Phase 2b: record the moment the coordinator commits to
-     * dispatching this task. queue_wait_seconds is computed
-     * here from submission_time -> start_time.
-     */
     record_task_start(&task.metrics);
 
     if (!coordinator_record_inflight(table, &task, selected->id))
@@ -339,12 +334,6 @@ int coordinator_handle_task_result(struct Runtime *runtime,
     task.exit_status = exit_status;
     task.state = (enum TaskState)state;
 
-    /*
-     * Phase 2b: record the moment the coordinator received the
-     * result. execution_seconds is dispatch -> result received,
-     * which includes the network round trip and worker
-     * fork/exec, not pure task execution time.
-     */
     record_task_completion(&task.metrics);
 
     coordinator_record_completed(table,
@@ -471,6 +460,82 @@ int coordinator_handle_query(struct Runtime *runtime,
         return 0;
     }
     send_message(client_socket, response);
+    return 1;
+}
+
+int coordinator_handle_status(struct Runtime *runtime,
+                              struct InFlightTable *table,
+                              int client_socket)
+{
+    if (runtime == NULL || table == NULL)
+    {
+        return 0;
+    }
+
+    int workers = runtime->registry.count;
+    int active = 0;
+
+    for (int i = 0; i < runtime->registry.count; i++)
+    {
+        if (runtime->registry.workers[i].status == WORKER_ACTIVE)
+        {
+            active++;
+        }
+    }
+
+    int queue = 0;
+
+    if (runtime->task_manager != NULL)
+    {
+        queue = runtime->task_manager->queue.count;
+    }
+
+    int inflight = 0;
+
+    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    {
+        if (table->entries[i].in_use)
+        {
+            inflight++;
+        }
+    }
+
+    int submitted = runtime->stats.tasks_submitted;
+    int completed = runtime->stats.tasks_completed;
+    int failed = runtime->stats.tasks_failed;
+
+    char response[256];
+
+    int n = snprintf(response,
+                     sizeof(response),
+                     "STATUS_REPLY|workers=%d|active=%d|queue=%d|"
+                     "inflight=%d|submitted=%d|completed=%d|failed=%d",
+                     workers,
+                     active,
+                     queue,
+                     inflight,
+                     submitted,
+                     completed,
+                     failed);
+
+    if (n <= 0 || (size_t)n >= sizeof(response))
+    {
+        return 0;
+    }
+
+    send_message(client_socket, response);
+
+    log_info("status_reported",
+             "STATUS workers=%d active=%d queue=%d inflight=%d "
+             "submitted=%d completed=%d failed=%d",
+             workers,
+             active,
+             queue,
+             inflight,
+             submitted,
+             completed,
+             failed);
+
     return 1;
 }
 

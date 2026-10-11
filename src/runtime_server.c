@@ -261,6 +261,20 @@ static int handle_worker_message(
     }
 
     /*
+     * ------------------------------------------------
+     * Client status query
+     * ------------------------------------------------
+     */
+    if (strcmp(message, "STATUS") == 0)
+    {
+        return coordinator_handle_status(
+            runtime,
+            table,
+            worker_socket
+        );
+    }
+
+    /*
      * Unknown message.
      */
     log_warn(
