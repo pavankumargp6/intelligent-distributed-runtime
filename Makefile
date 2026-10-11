@@ -162,6 +162,9 @@ test:
 	@echo "===== status_test.sh ====="
 	bash tests/status_test.sh
 	@echo ""
+	@echo "===== dispatch_timeout_test.sh ====="
+	bash tests/dispatch_timeout_test.sh
+	@echo ""
 	@echo "===== wal_recovery_test.sh ====="
 	bash tests/wal_recovery_test.sh
 	@echo ""

@@ -2,10 +2,10 @@
  * Minimal IDR client.
  *
  * Usage:
- *   ./client_submit <command> [args...]
+ *   ./client_submit [--idempotent] <command> [args...]
  *
- * Connects to the coordinator, sends SUBMIT|...,
- * and prints the response.
+ * Connects to the coordinator, sends SUBMIT|..., and prints
+ * the response.
  */
 
 #include <stdio.h>
@@ -25,9 +25,20 @@
 
 int main(int argc, char *argv[])
 {
-    if (argc < 2)
+    int idempotent = 0;
+    int first_arg = 1;
+
+    if (argc >= 2 && strcmp(argv[1], "--idempotent") == 0)
     {
-        fprintf(stderr, "Usage: %s <command> [args...]\n", argv[0]);
+        idempotent = 1;
+        first_arg = 2;
+    }
+
+    if (argc <= first_arg)
+    {
+        fprintf(stderr,
+                "Usage: %s [--idempotent] <command> [args...]\n",
+                argv[0]);
         return 2;
     }
 
@@ -39,23 +50,32 @@ int main(int argc, char *argv[])
     offset = wire_append_delimiter(message, sizeof(message), offset);
     if (offset == 0) { fprintf(stderr, "build failed at 1\n"); return 1; }
 
-    offset = wire_append_field(message, sizeof(message), offset, argv[1]);
+    offset = wire_append_field(message, sizeof(message), offset, argv[first_arg]);
     if (offset == 0) { fprintf(stderr, "build failed at 2\n"); return 1; }
 
     offset = wire_append_delimiter(message, sizeof(message), offset);
     if (offset == 0) { fprintf(stderr, "build failed at 3\n"); return 1; }
 
-    offset = wire_append_int(message, sizeof(message), offset, argc - 2);
+    offset = wire_append_int(message, sizeof(message), offset, argc - first_arg - 1);
     if (offset == 0) { fprintf(stderr, "build failed at 4\n"); return 1; }
 
     int i;
-    for (i = 2; i < argc; i++)
+    for (i = first_arg + 1; i < argc; i++)
     {
         offset = wire_append_delimiter(message, sizeof(message), offset);
         if (offset == 0) { fprintf(stderr, "build failed at 5\n"); return 1; }
 
         offset = wire_append_field(message, sizeof(message), offset, argv[i]);
         if (offset == 0) { fprintf(stderr, "build failed at 6\n"); return 1; }
+    }
+
+    if (idempotent)
+    {
+        offset = wire_append_delimiter(message, sizeof(message), offset);
+        if (offset == 0) { fprintf(stderr, "build failed at 7\n"); return 1; }
+
+        offset = wire_append_int(message, sizeof(message), offset, 1);
+        if (offset == 0) { fprintf(stderr, "build failed at 8\n"); return 1; }
     }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
