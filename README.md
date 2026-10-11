@@ -61,8 +61,10 @@ corrupt the message.
 | coord → worker   | `REGISTER_ACK` / `REGISTER_REJECT`                            |
 | worker → coord   | `HEARTBEAT|<id>`                                              |
 | coord → worker   | `HEARTBEAT_ACK` / `HEARTBEAT_REJECT`                          |
-| client → coord   | `SUBMIT|<len>:<cmd>|<argc>|<len>:<a1>|...`                    |
+| client → coord   | `SUBMIT\|<len>:<cmd>\|<argc>\|<len>:<a1>\|...\|[idempotent:0\|1]` |
 | coord → client   | `SUBMIT_ACK|<task_id>` / `SUBMIT_REJECT`                      |
+| worker → coord   | `TASK_ACCEPT\|<task_id>`                                    |
+| coord → worker   | `TASK_ACCEPT_ACK\|<task_id>` / `TASK_ACCEPT_REJECT\|<task_id>\|<reason>` |
 | worker → coord   | `TASK_REQUEST|<worker_id>`                                    |
 | coord → worker   | `TASK_ASSIGN|<id>|<len>:<cmd>|<argc>|<a1>|...` / `NO_TASK`    |
 | worker → coord   | `TASK_RESULT|<task_id>|<worker_id>|<exit>|<state>`            |
@@ -127,6 +129,7 @@ down processes, and exit non-zero on failure.
 | `fault_injection_test.sh`   | A worker killed mid-task is detected and its task recorded as `TASK_FAILED`. |
 | `pull_model_test.sh`        | Selection is scoped to the asking worker, not global-best.          |
 | `hung_client_test.sh`       | A stuck client does not block other clients or workers.             |
+| `dispatch_timeout_test.sh` | A silent worker never sends TASK_ACCEPT; the reaper fails non-idempotent tasks and re-queues idempotent ones. |
 
 Run them:
 
@@ -134,6 +137,7 @@ Run them:
     bash tests/fault_injection_test.sh
     bash tests/pull_model_test.sh
     bash tests/hung_client_test.sh
+    bash tests/dispatch_timeout_test.sh
 
     gcc -Wall -Wextra -Isrc \
         tests/connection_pool_test.c src/connection_pool.c src/network_protocol.c \
