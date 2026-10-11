@@ -2,6 +2,7 @@
 
 #include "runtime.h"
 #include "runtime_server.h"
+#include "log.h"
 
 #define RUNTIME_SERVER_PORT 5001
 
@@ -12,6 +13,8 @@ int main(void)
      * flushed promptly and survive SIGTERM.
      */
     setvbuf(stdout, NULL, _IOLBF, 0);
+    log_init();
+
     struct TaskManager task_manager;
     struct WorkerPool worker_pool;
     struct Scheduler scheduler;
@@ -37,7 +40,7 @@ int main(void)
         &worker_pool
     );
 
-    printf("Starting runtime coordinator...\n");
+    log_info("coordinator_starting", "Starting runtime coordinator...");
 
     /*
      * Start the TCP coordinator.
@@ -46,9 +49,7 @@ int main(void)
             &runtime,
             RUNTIME_SERVER_PORT))
     {
-        printf(
-            "Runtime server failed.\n"
-        );
+        log_error("coordinator_start_failed", "Runtime server failed.");
 
         return 1;
     }
