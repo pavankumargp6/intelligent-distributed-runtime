@@ -22,3 +22,6 @@ build/
 
 # Write-ahead log
 idr-wal*.log
+
+# nano backup files
+*.ccp
