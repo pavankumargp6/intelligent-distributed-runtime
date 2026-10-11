@@ -20,15 +20,6 @@
 static void run_task_in_child(const struct Worker *worker,
                               const struct Task *assigned)
 {
-    /*
-     * Child process: execute the task locally and
-     * report the result to the coordinator.
-     *
-     * We work on a local copy so we do not touch the
-     * parent's memory (which is a separate address
-     * space anyway) and so we can mutate the Task
-     * freely while calling the executor.
-     */
     signal(SIGCHLD, SIG_DFL);
     struct Task task = *assigned;
 
@@ -93,11 +84,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /*
-     * Children are auto-reaped by the kernel.
-     * The parent never blocks in waitpid, so
-     * heartbeats continue while tasks run.
-     */
     signal(SIGCHLD, SIG_IGN);
 
     struct Worker worker;
@@ -165,9 +151,6 @@ int main(int argc, char *argv[])
 
         log_debug("heartbeat_acked", "Heartbeat acknowledged.");
 
-        /*
-         * Poll the coordinator for work.
-         */
         struct Task task;
         int has_task = 0;
 
@@ -194,6 +177,16 @@ int main(int argc, char *argv[])
                  task.command,
                  task.argument_count);
 
+        if (!send_task_accept_to_runtime(&worker,
+                                         RUNTIME_ADDRESS,
+                                         task.id))
+        {
+            log_warn("task_accept_failed",
+                     "Could not accept task %d; discarding.",
+                     task.id);
+            continue;
+        }
+
         pid_t child = fork();
 
         if (child < 0)
@@ -205,13 +198,7 @@ int main(int argc, char *argv[])
         if (child == 0)
         {
             run_task_in_child(&worker, &task);
-            /* run_task_in_child never returns */
         }
-
-        /*
-         * Parent returns to the loop; the child
-         * will report the result when it finishes.
-         */
     }
 
     return 0;

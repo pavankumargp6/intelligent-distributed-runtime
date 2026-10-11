@@ -24,36 +24,23 @@ struct Task
     int argument_count;
     char arguments[TASK_ARGUMENT_COUNT][TASK_ARGUMENT_SIZE];
 
-    /*
-     * Resource requirements for this task.
-     *
-     * CPU requirement is expressed as a percentage
-     * of one CPU core.
-     *
-     * Memory requirement is expressed in megabytes.
-     */
     double required_cpu_percent;
     long required_memory_mb;
 
-    /*
-     * ID of the worker selected to execute
-     * this task.
-     *
-     * A value of -1 means that no worker
-     * has been assigned yet.
-     */
     int assigned_worker_id;
 
-    /*
-     * Timing and execution metrics
-     * collected during the task lifecycle.
-     */
     struct TaskMetrics metrics;
 
     enum TaskState state;
 
+    /*
+     * Whether the task can be safely retried on dispatch
+     * timeout. 0 (default) means no: the coordinator will
+     * fail the task rather than risk duplicate side effects.
+     */
+    int idempotent;
+
     int pid;
     int exit_status;
 };
-
 #endif

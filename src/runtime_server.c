@@ -40,46 +40,33 @@ static int handle_worker_message(
 
         if (!parse_worker_registration(message, &worker))
         {
-            log_warn(
-                "registration_invalid",
-                "Invalid worker registration."
-            );
-
+            log_warn("registration_invalid",
+                     "Invalid worker registration.");
             send_message(worker_socket, "REGISTER_REJECT");
             return 0;
         }
 
-        log_info(
-            "worker_registration",
-            "Worker registration: id=%d cpu=%.2f%% mem_mb=%ld",
-            worker.id,
-            worker.resources.total_cpu_percent,
-            worker.resources.total_memory_mb
-        );
+        log_info("worker_registration",
+                 "Worker registration: id=%d cpu=%.2f%% mem_mb=%ld",
+                 worker.id,
+                 worker.resources.total_cpu_percent,
+                 worker.resources.total_memory_mb);
 
         if (!runtime_register_worker(runtime, &worker))
         {
-            log_warn(
-                "registration_failed",
-                "Failed to register worker."
-            );
-
+            log_warn("registration_failed",
+                     "Failed to register worker.");
             send_message(worker_socket, "REGISTER_REJECT");
             return 0;
         }
 
-        log_info(
-            "worker_registered",
-            "Worker registered with runtime. ✅"
-        );
+        log_info("worker_registered",
+                 "Worker registered with runtime. ✅");
 
         if (!send_message(worker_socket, "REGISTER_ACK"))
         {
-            log_warn(
-                "register_ack_failed",
-                "Failed to send registration acknowledgement."
-            );
-
+            log_warn("register_ack_failed",
+                     "Failed to send registration acknowledgement.");
             return 0;
         }
 
@@ -93,40 +80,29 @@ static int handle_worker_message(
 
         if (!parse_worker_heartbeat(message, &worker_id))
         {
-            log_warn(
-                "heartbeat_invalid",
-                "Invalid heartbeat message."
-            );
-
+            log_warn("heartbeat_invalid",
+                     "Invalid heartbeat message.");
             send_message(worker_socket, "HEARTBEAT_REJECT");
             return 0;
         }
 
-        log_debug(
-            "heartbeat_received",
-            "Heartbeat received from worker %d.",
-            worker_id
-        );
+        log_debug("heartbeat_received",
+                  "Heartbeat received from worker %d.",
+                  worker_id);
 
         if (!update_worker_heartbeat(&runtime->registry, worker_id))
         {
-            log_warn(
-                "heartbeat_unknown_worker",
-                "Unknown worker: %d",
-                worker_id
-            );
-
+            log_warn("heartbeat_unknown_worker",
+                     "Unknown worker: %d",
+                     worker_id);
             send_message(worker_socket, "HEARTBEAT_REJECT");
             return 0;
         }
 
         if (!send_message(worker_socket, "HEARTBEAT_ACK"))
         {
-            log_warn(
-                "heartbeat_ack_failed",
-                "Failed to send heartbeat acknowledgement."
-            );
-
+            log_warn("heartbeat_ack_failed",
+                     "Failed to send heartbeat acknowledgement.");
             return 0;
         }
 
@@ -143,6 +119,12 @@ static int handle_worker_message(
     if (strncmp(message, "TASK_REQUEST|", 13) == 0)
     {
         return coordinator_handle_task_request(
+            runtime, table, worker_socket, message);
+    }
+
+    if (strncmp(message, "TASK_ACCEPT|", 12) == 0)
+    {
+        return coordinator_handle_task_accept(
             runtime, table, worker_socket, message);
     }
 

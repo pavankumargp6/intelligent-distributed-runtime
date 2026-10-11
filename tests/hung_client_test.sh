@@ -18,6 +18,7 @@
 
 set -u
 export IDR_WAL_PATH=/tmp/idr_wal_hung_client_test.log
+rm -f "$IDR_WAL_PATH"
 COORD_PID=""
 HUNG_PID=""
 

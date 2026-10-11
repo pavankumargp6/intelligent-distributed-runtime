@@ -32,6 +32,7 @@
 
 set -u
 export IDR_WAL_PATH=/tmp/idr_wal_pull_model_test.log
+rm -f "$IDR_WAL_PATH"
 
 if ss -ltn 2>/dev/null | grep -q ":5001 "; then
     echo "FAIL: port 5001 already in use. Kill leftovers first:"

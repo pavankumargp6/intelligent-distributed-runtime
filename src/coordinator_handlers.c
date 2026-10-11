@@ -76,6 +76,22 @@ static int parse_submit(const char *message,
 
     task->argument_count = (int)argument_count;
 
+    /*
+     * Optional trailing field: "<idempotent:0|1>". If absent,
+     * defaults to 0 (not safe to retry).
+     */
+    if (*cursor == '|')
+    {
+        cursor++;
+
+        long idem = 0;
+
+        if (wire_read_int(&cursor, &idem))
+        {
+            task->idempotent = idem ? 1 : 0;
+        }
+    }
+
     return 1;
 }
 
@@ -138,15 +154,6 @@ static int build_task_assign(const struct Task *task,
     return 1;
 }
 
-/*
- * Build a WAL SUBMIT record:
- *
- *   SUBMIT|<task_id>|<cmd_len>:<cmd>|<argc>|<a1_len>:<a1>|...
- *
- * Uses the same length-prefixed field encoding as the wire
- * protocol so commands and arguments containing '|' or
- * newlines cannot corrupt the record boundary.
- */
 static int build_wal_submit(const struct Task *task,
                             char *buffer,
                             size_t buffer_size)
@@ -197,6 +204,11 @@ static int build_wal_submit(const struct Task *task,
         if (offset == 0) return 0;
     }
 
+    offset = wire_append_delimiter(buffer, buffer_size, offset);
+    if (offset == 0) return 0;
+
+    offset = wire_append_int(buffer, buffer_size, offset, task->idempotent);
+    if (offset == 0) return 0;
     return 1;
 }
 
@@ -230,10 +242,6 @@ int coordinator_handle_submit(struct Runtime *runtime,
 
     task.id = id;
 
-    /*
-     * Fail early if the queue is full. We must not write a WAL
-     * record for a task we are about to reject.
-     */
     if (is_task_queue_full(&runtime->task_manager->queue))
     {
         log_warn("queue_full", "Task queue full; rejecting task %d.", id);
@@ -241,11 +249,6 @@ int coordinator_handle_submit(struct Runtime *runtime,
         return 0;
     }
 
-    /*
-     * WAL the submission before queuing, so the task is durable
-     * once we ack. If the append fails we reject rather than
-     * accept a task that would be lost on coordinator restart.
-     */
     char wal_line[NETWORK_MAX_MESSAGE_SIZE];
 
     if (!build_wal_submit(&task, wal_line, sizeof(wal_line)))
@@ -380,6 +383,67 @@ int coordinator_handle_task_request(struct Runtime *runtime,
     return 1;
 }
 
+int coordinator_handle_task_accept(struct Runtime *runtime,
+                                   struct InFlightTable *table,
+                                   int worker_socket,
+                                   const char *message)
+{
+    (void)runtime;
+
+    if (table == NULL || message == NULL)
+    {
+        return 0;
+    }
+
+    const char *prefix = "TASK_ACCEPT|";
+    size_t prefix_length = strlen(prefix);
+
+    if (strncmp(message, prefix, prefix_length) != 0)
+    {
+        return 0;
+    }
+
+    const char *cursor = message + prefix_length;
+
+    long task_id = 0;
+
+    if (!wire_read_int(&cursor, &task_id) || task_id <= 0)
+    {
+        send_message(worker_socket, "TASK_ACCEPT_REJECT|-1|bad_id");
+        return 0;
+    }
+
+    if (!coordinator_mark_accepted(table, (int)task_id))
+    {
+        log_warn("task_accept_unknown",
+                 "TASK_ACCEPT for unknown task %ld", task_id);
+
+        char reject[64];
+        int n = snprintf(reject, sizeof(reject),
+                         "TASK_ACCEPT_REJECT|%ld|unknown_task",
+                         task_id);
+        if (n > 0 && (size_t)n < sizeof(reject))
+        {
+            send_message(worker_socket, reject);
+        }
+        return 0;
+    }
+
+    log_debug("task_accepted_by_worker",
+              "Task %ld accepted by worker", task_id);
+
+    char ack[64];
+    int n = snprintf(ack, sizeof(ack),
+                     "TASK_ACCEPT_ACK|%ld", task_id);
+
+    if (n > 0 && (size_t)n < sizeof(ack))
+    {
+        send_message(worker_socket, ack);
+    }
+
+    return 1;
+}
+
 int coordinator_handle_task_result(struct Runtime *runtime,
                                    struct InFlightTable *table,
                                    int worker_socket,
@@ -433,12 +497,6 @@ int coordinator_handle_task_result(struct Runtime *runtime,
 
     record_task_completion(&task.metrics);
 
-    /*
-     * WAL the result before recording it in the completed ring.
-     * If the coordinator crashes between here and the ring
-     * update, recovery will replay the result and the task
-     * ends up in the ring either way.
-     */
     char wal_line[128];
 
     int n_wal = snprintf(wal_line,

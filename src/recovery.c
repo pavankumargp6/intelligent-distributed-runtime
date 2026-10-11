@@ -113,6 +113,19 @@ static int parse_submit_record(const char *line,
 
     task.argument_count = (int)argc;
 
+    /*
+     * Optional trailing idempotent flag. Absent in records
+     * written by pre-4c versions; default 0.
+     */
+    if (*cursor == '|')
+    {
+        cursor++;
+        long idem = 0;
+        if (wire_read_int(&cursor, &idem))
+        {
+            task.idempotent = idem ? 1 : 0;
+        }
+    }
     *task_id_out = (int)task_id;
     *task_out = task;
 

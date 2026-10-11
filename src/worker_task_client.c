@@ -9,6 +9,7 @@
 #include "worker_task_client.h"
 #include "network_protocol.h"
 #include "wire_fields.h"
+#include "log.h"
 
 #define RUNTIME_SERVER_PORT 5001
 
@@ -197,6 +198,65 @@ int request_task_from_runtime(
     }
 
     *has_task = 1;
+
+    return 1;
+}
+
+int send_task_accept_to_runtime(
+    const struct Worker *worker,
+    const char *runtime_address,
+    int task_id)
+{
+    if (worker == NULL || runtime_address == NULL || task_id <= 0)
+    {
+        return 0;
+    }
+
+    int socket_fd = connect_to_runtime(runtime_address);
+
+    if (socket_fd < 0)
+    {
+        return 0;
+    }
+
+    char message[64];
+    int message_length = snprintf(message,
+                                  sizeof(message),
+                                  "TASK_ACCEPT|%d",
+                                  task_id);
+
+    if (message_length <= 0 ||
+        (size_t)message_length >= sizeof(message))
+    {
+        close(socket_fd);
+        return 0;
+    }
+
+    if (!send_message(socket_fd, message))
+    {
+        close(socket_fd);
+        return 0;
+    }
+
+    char response[128];
+
+    if (!receive_message(socket_fd,
+                         response,
+                         sizeof(response)))
+    {
+        close(socket_fd);
+        return 0;
+    }
+
+    close(socket_fd);
+
+    if (strncmp(response, "TASK_ACCEPT_ACK|", 16) != 0)
+    {
+        log_warn("task_accept_rejected",
+                 "Coordinator replied %s for task %d",
+                 response, task_id);
+        return 0;
+    }
 
     return 1;
 }

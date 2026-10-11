@@ -1,4 +1,5 @@
 #include <string.h>
+#include <time.h>
 
 #include "coordinator_tasks.h"
 
@@ -45,6 +46,8 @@ int coordinator_record_inflight(struct InFlightTable *table,
             table->entries[i].task_id = task->id;
             table->entries[i].worker_id = worker_id;
             table->entries[i].task = *task;
+            table->entries[i].dispatched_at = time(NULL);
+            table->entries[i].accepted = 0;
             return 1;
         }
     }
@@ -100,6 +103,28 @@ int coordinator_is_inflight(struct InFlightTable *table,
         if (table->entries[i].in_use &&
             table->entries[i].task_id == task_id)
         {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int coordinator_mark_accepted(struct InFlightTable *table,
+                              int task_id)
+{
+    if (table == NULL)
+    {
+        return 0;
+    }
+
+    int i;
+    for (i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    {
+        if (table->entries[i].in_use &&
+            table->entries[i].task_id == task_id)
+        {
+            table->entries[i].accepted = 1;
             return 1;
         }
     }
