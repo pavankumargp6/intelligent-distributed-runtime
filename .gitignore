@@ -19,3 +19,6 @@ process_monitor
 
 # Makefile build output
 build/
+
+# Write-ahead log
+idr-wal*.log

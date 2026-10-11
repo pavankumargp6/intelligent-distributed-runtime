@@ -31,6 +31,7 @@
 #   - the coordinator log contains no "Scheduler picked worker" line
 
 set -u
+export IDR_WAL_PATH=/tmp/idr_wal_pull_model_test.log
 
 if ss -ltn 2>/dev/null | grep -q ":5001 "; then
     echo "FAIL: port 5001 already in use. Kill leftovers first:"
@@ -77,6 +78,8 @@ gcc -Wall -Wextra \
     src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
     src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
     src/log.c \
+    src/wal.c \
+    src/recovery.c \
     src/connection_pool.c \
     -o "$COORD_BIN" || exit 1
 

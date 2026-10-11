@@ -17,6 +17,7 @@
 #   5. Wait for the coordinator to reap the idle connection.
 
 set -u
+export IDR_WAL_PATH=/tmp/idr_wal_hung_client_test.log
 COORD_PID=""
 HUNG_PID=""
 
@@ -51,6 +52,8 @@ gcc -Wall -Wextra \
     src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
     src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
     src/log.c \
+    src/wal.c \
+    src/recovery.c \
     src/connection_pool.c \
     -o "$COORD_BIN" || exit 1
 

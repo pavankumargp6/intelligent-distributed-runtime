@@ -235,7 +235,7 @@ int recovery_replay_wal(struct Runtime *runtime,
         return -1;
     }
 
-    struct RecoveryContext ctx;
+    static struct RecoveryContext ctx;
     memset(&ctx, 0, sizeof(ctx));
 
     int lines = wal_foreach_line(path, recovery_line_cb, &ctx);

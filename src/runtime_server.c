@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -14,16 +15,13 @@
 #include "coordinator_tasks.h"
 #include "coordinator_handlers.h"
 #include "connection_pool.h"
+#include "recovery.h"
+#include "wal.h"
 #include "log.h"
 
 #define MAX_POLLFDS (CONNECTION_POOL_CAPACITY + 1)
+#define DEFAULT_WAL_PATH "./idr-wal.log"
 
-/*
- * Dispatch one complete message that the connection pool has
- * already read into "message". The worker_socket is used only
- * for sending the response; the connection is closed by the
- * pool after this function returns.
- */
 static int handle_worker_message(
     struct Runtime *runtime,
     struct InFlightTable *table,
@@ -36,32 +34,18 @@ static int handle_worker_message(
         message
     );
 
-    /*
-     * ------------------------------------------------
-     * Worker registration
-     * ------------------------------------------------
-     */
-    if (strncmp(
-            message,
-            "REGISTER|",
-            9) == 0)
+    if (strncmp(message, "REGISTER|", 9) == 0)
     {
         struct Worker worker = {0};
 
-        if (!parse_worker_registration(
-                message,
-                &worker))
+        if (!parse_worker_registration(message, &worker))
         {
             log_warn(
                 "registration_invalid",
                 "Invalid worker registration."
             );
 
-            send_message(
-                worker_socket,
-                "REGISTER_REJECT"
-            );
-
+            send_message(worker_socket, "REGISTER_REJECT");
             return 0;
         }
 
@@ -73,20 +57,14 @@ static int handle_worker_message(
             worker.resources.total_memory_mb
         );
 
-        if (!runtime_register_worker(
-                runtime,
-                &worker))
+        if (!runtime_register_worker(runtime, &worker))
         {
             log_warn(
                 "registration_failed",
                 "Failed to register worker."
             );
 
-            send_message(
-                worker_socket,
-                "REGISTER_REJECT"
-            );
-
+            send_message(worker_socket, "REGISTER_REJECT");
             return 0;
         }
 
@@ -95,9 +73,7 @@ static int handle_worker_message(
             "Worker registered with runtime. ✅"
         );
 
-        if (!send_message(
-                worker_socket,
-                "REGISTER_ACK"))
+        if (!send_message(worker_socket, "REGISTER_ACK"))
         {
             log_warn(
                 "register_ack_failed",
@@ -107,40 +83,22 @@ static int handle_worker_message(
             return 0;
         }
 
-        log_debug(
-            "register_ack_sent",
-            "Sent: REGISTER_ACK"
-        );
-
+        log_debug("register_ack_sent", "Sent: REGISTER_ACK");
         return 1;
     }
 
-    /*
-     * ------------------------------------------------
-     * Worker heartbeat
-     * ------------------------------------------------
-     */
-    if (strncmp(
-            message,
-            "HEARTBEAT|",
-            10) == 0)
+    if (strncmp(message, "HEARTBEAT|", 10) == 0)
     {
         int worker_id;
 
-        if (!parse_worker_heartbeat(
-                message,
-                &worker_id))
+        if (!parse_worker_heartbeat(message, &worker_id))
         {
             log_warn(
                 "heartbeat_invalid",
                 "Invalid heartbeat message."
             );
 
-            send_message(
-                worker_socket,
-                "HEARTBEAT_REJECT"
-            );
-
+            send_message(worker_socket, "HEARTBEAT_REJECT");
             return 0;
         }
 
@@ -150,9 +108,7 @@ static int handle_worker_message(
             worker_id
         );
 
-        if (!update_worker_heartbeat(
-                &runtime->registry,
-                worker_id))
+        if (!update_worker_heartbeat(&runtime->registry, worker_id))
         {
             log_warn(
                 "heartbeat_unknown_worker",
@@ -160,17 +116,11 @@ static int handle_worker_message(
                 worker_id
             );
 
-            send_message(
-                worker_socket,
-                "HEARTBEAT_REJECT"
-            );
-
+            send_message(worker_socket, "HEARTBEAT_REJECT");
             return 0;
         }
 
-        if (!send_message(
-                worker_socket,
-                "HEARTBEAT_ACK"))
+        if (!send_message(worker_socket, "HEARTBEAT_ACK"))
         {
             log_warn(
                 "heartbeat_ack_failed",
@@ -180,114 +130,42 @@ static int handle_worker_message(
             return 0;
         }
 
-        log_debug(
-            "heartbeat_ack_sent",
-            "Sent: HEARTBEAT_ACK"
-        );
-
+        log_debug("heartbeat_ack_sent", "Sent: HEARTBEAT_ACK");
         return 1;
     }
 
-    /*
-     * ------------------------------------------------
-     * Client task submission
-     * ------------------------------------------------
-     */
-    if (strncmp(
-            message,
-            "SUBMIT|",
-            7) == 0)
+    if (strncmp(message, "SUBMIT|", 7) == 0)
     {
         return coordinator_handle_submit(
-            runtime,
-            table,
-            worker_socket,
-            message
-        );
+            runtime, table, worker_socket, message);
     }
 
-    /*
-     * ------------------------------------------------
-     * Worker task request
-     * ------------------------------------------------
-     */
-    if (strncmp(
-            message,
-            "TASK_REQUEST|",
-            13) == 0)
+    if (strncmp(message, "TASK_REQUEST|", 13) == 0)
     {
         return coordinator_handle_task_request(
-            runtime,
-            table,
-            worker_socket,
-            message
-        );
+            runtime, table, worker_socket, message);
     }
 
-    /*
-     * ------------------------------------------------
-     * Worker task result
-     * ------------------------------------------------
-     */
-    if (strncmp(
-            message,
-            "TASK_RESULT|",
-            12) == 0)
+    if (strncmp(message, "TASK_RESULT|", 12) == 0)
     {
         return coordinator_handle_task_result(
-            runtime,
-            table,
-            worker_socket,
-            message
-        );
+            runtime, table, worker_socket, message);
     }
 
-    /*
-     * ------------------------------------------------
-     * Client task query
-     * ------------------------------------------------
-     */
-    if (strncmp(
-            message,
-            "QUERY|",
-            6) == 0)
+    if (strncmp(message, "QUERY|", 6) == 0)
     {
         return coordinator_handle_query(
-            runtime,
-            table,
-            worker_socket,
-            message
-        );
+            runtime, table, worker_socket, message);
     }
 
-    /*
-     * ------------------------------------------------
-     * Client status query
-     * ------------------------------------------------
-     */
     if (strcmp(message, "STATUS") == 0)
     {
         return coordinator_handle_status(
-            runtime,
-            table,
-            worker_socket
-        );
+            runtime, table, worker_socket);
     }
 
-    /*
-     * Unknown message.
-     */
-    log_warn(
-        "message_unknown",
-        "Unknown message: %s",
-        message
-    );
-
-    send_message(
-        worker_socket,
-        "UNKNOWN_COMMAND"
-    );
-
+    log_warn("message_unknown", "Unknown message: %s", message);
+    send_message(worker_socket, "UNKNOWN_COMMAND");
     return 0;
 }
 
@@ -300,50 +178,57 @@ int start_runtime_server(
         return 0;
     }
 
-    /*
-     * In-flight task table. Single-threaded server,
-     * so no locking is required yet.
-     */
     struct InFlightTable in_flight;
     coordinator_tasks_init(&in_flight);
 
-    /*
-     * Connection pool. ~256 KB, so static (BSS) rather
-     * than stack.
-     */
+    const char *wal_path = getenv("IDR_WAL_PATH");
+    if (wal_path == NULL || wal_path[0] == '\0')
+    {
+        wal_path = DEFAULT_WAL_PATH;
+    }
+
+    runtime->wal.fd = -1;
+
+    if (!wal_open_for_append(&runtime->wal, wal_path))
+    {
+        log_error("wal_open_failed",
+                  "Could not open WAL at %s", wal_path);
+        return 0;
+    }
+
+    log_info("wal_opened", "Write-ahead log: %s", wal_path);
+
+    if (recovery_replay_wal(runtime, &in_flight, wal_path) < 0)
+    {
+        log_error("wal_replay_failed",
+                  "Could not replay WAL; refusing to start.");
+        wal_close(&runtime->wal);
+        return 0;
+    }
+
     static struct ConnectionPool pool;
     pool_init(&pool);
 
-    /*
-     * Create TCP socket.
-     */
-    int server_socket =
-        socket(AF_INET, SOCK_STREAM, 0);
+    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
 
     if (server_socket < 0)
     {
         perror("socket");
+        wal_close(&runtime->wal);
         return 0;
     }
 
     int reuse = 1;
 
-    if (setsockopt(
-            server_socket,
-            SOL_SOCKET,
-            SO_REUSEADDR,
-            &reuse,
-            sizeof(reuse)) < 0)
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR,
+                   &reuse, sizeof(reuse)) < 0)
     {
         perror("setsockopt");
         close(server_socket);
+        wal_close(&runtime->wal);
         return 0;
     }
 
-    /*
-     * Non-blocking listener so accept() cannot stall the
-     * poll loop.
-     */
     int flags = fcntl(server_socket, F_GETFL, 0);
 
     if (flags < 0 ||
@@ -351,6 +236,7 @@ int start_runtime_server(
     {
         perror("fcntl");
         close(server_socket);
+        wal_close(&runtime->wal);
         return 0;
     }
 
@@ -360,13 +246,13 @@ int start_runtime_server(
     server_address.sin_addr.s_addr = htonl(INADDR_ANY);
     server_address.sin_port = htons(port);
 
-    if (bind(
-            server_socket,
-            (struct sockaddr *)&server_address,
-            sizeof(server_address)) < 0)
+    if (bind(server_socket,
+             (struct sockaddr *)&server_address,
+             sizeof(server_address)) < 0)
     {
         perror("bind");
         close(server_socket);
+        wal_close(&runtime->wal);
         return 0;
     }
 
@@ -374,6 +260,7 @@ int start_runtime_server(
     {
         perror("listen");
         close(server_socket);
+        wal_close(&runtime->wal);
         return 0;
     }
 
@@ -394,78 +281,52 @@ int start_runtime_server(
         pollfds[0].events = POLLIN;
         pollfds[0].revents = 0;
 
-        int nfds = pool_build_pollfds(
-            &pool,
-            pollfds,
-            MAX_POLLFDS
-        );
+        int nfds = pool_build_pollfds(&pool, pollfds, MAX_POLLFDS);
 
-        int poll_result =
-            poll(pollfds, nfds, poll_timeout_ms);
+        int poll_result = poll(pollfds, nfds, poll_timeout_ms);
 
         if (poll_result < 0)
         {
-            if (errno == EINTR)
-            {
-                continue;
-            }
+            if (errno == EINTR) continue;
             perror("poll");
             continue;
         }
 
-        /*
-         * Accept all pending connections.
-         */
         if (pollfds[0].revents & POLLIN)
         {
             while (1)
             {
                 struct sockaddr_in client_address;
-                socklen_t client_length =
-                    sizeof(client_address);
+                socklen_t client_length = sizeof(client_address);
 
                 int client_socket = accept(
                     server_socket,
                     (struct sockaddr *)&client_address,
-                    &client_length
-                );
+                    &client_length);
 
                 if (client_socket < 0)
                 {
                     if (errno == EAGAIN ||
-                        errno == EWOULDBLOCK)
-                    {
-                        break;
-                    }
-                    if (errno == EINTR)
-                    {
-                        continue;
-                    }
+                        errno == EWOULDBLOCK) break;
+                    if (errno == EINTR) continue;
                     perror("accept");
                     break;
                 }
 
-                log_debug(
-                    "connection_accepted",
-                    "Connection accepted."
-                );
+                log_debug("connection_accepted",
+                          "Connection accepted.");
 
                 int idx = pool_add(&pool, client_socket);
 
                 if (idx < 0)
                 {
-                    log_warn(
-                        "pool_full",
-                        "Connection pool full; rejecting."
-                    );
+                    log_warn("pool_full",
+                             "Connection pool full; rejecting.");
                     close(client_socket);
                 }
             }
         }
 
-        /*
-         * Read from every ready connection.
-         */
         for (int i = 1; i < nfds; i++)
         {
             short revents = pollfds[i].revents;
@@ -477,9 +338,7 @@ int start_runtime_server(
 
             int slot = -1;
 
-            for (int j = 0;
-                 j < CONNECTION_POOL_CAPACITY;
-                 j++)
+            for (int j = 0; j < CONNECTION_POOL_CAPACITY; j++)
             {
                 if (pool.conns[j].fd == pollfds[i].fd)
                 {
@@ -488,10 +347,7 @@ int start_runtime_server(
                 }
             }
 
-            if (slot < 0)
-            {
-                continue;
-            }
+            if (slot < 0) continue;
 
             int step = pool_step(&pool.conns[slot]);
 
@@ -501,69 +357,41 @@ int start_runtime_server(
                 continue;
             }
 
-            if (step == 0)
-            {
-                continue;
-            }
+            if (step == 0) continue;
 
-            /*
-             * Complete message. Dispatch on the payload
-             * (skip the 4-byte header), send response,
-             * then close the connection.
-             */
             int fd = pool.conns[slot].fd;
             const char *payload = pool.conns[slot].buffer + 4;
 
-            handle_worker_message(
-                runtime,
-                &in_flight,
-                fd,
-                payload
-            );
+            handle_worker_message(runtime, &in_flight, fd, payload);
 
             pool_remove(&pool, slot);
         }
 
-        /*
-         * Housekeeping every tick.
-         */
         int expired = pool_expire_idle(&pool);
 
         if (expired > 0)
         {
-            log_info(
-                "idle_connections_closed",
-                "Idle connections closed: %d",
-                expired
-            );
+            log_info("idle_connections_closed",
+                     "Idle connections closed: %d", expired);
         }
 
-        int stale_workers =
-            mark_stale_workers(
-                &runtime->registry
-            );
+        int stale_workers = mark_stale_workers(&runtime->registry);
 
         if (stale_workers > 0)
         {
-            log_info(
-                "workers_marked_unavailable",
-                "Workers marked unavailable: %d",
-                stale_workers
-            );
+            log_info("workers_marked_unavailable",
+                     "Workers marked unavailable: %d",
+                     stale_workers);
         }
 
         int reaped = coordinator_reap_dead_worker_tasks(
-            runtime,
-            &in_flight
-        );
+            runtime, &in_flight);
 
         if (reaped > 0)
         {
-            log_info(
-                "in_flight_reaped",
-                "Reaped in-flight tasks from unavailable workers: %d",
-                reaped
-            );
+            log_info("in_flight_reaped",
+                     "Reaped in-flight tasks from unavailable workers: %d",
+                     reaped);
         }
     }
 
