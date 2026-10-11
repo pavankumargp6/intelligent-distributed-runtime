@@ -8,6 +8,7 @@
 #include "task_manager.h"
 #include "runtime_stats.h"
 #include "worker_registry.h"
+#include "log.h"
 
 static int parse_submit(const char *message,
                         struct Task *task)
@@ -150,7 +151,7 @@ int coordinator_handle_submit(struct Runtime *runtime,
 
     if (!parse_submit(message, &task))
     {
-        printf("Invalid SUBMIT message.\n");
+        log_warn("submit_invalid", "Invalid SUBMIT message.");
         send_message(client_socket, "SUBMIT_REJECT");
         return 0;
     }
@@ -159,7 +160,7 @@ int coordinator_handle_submit(struct Runtime *runtime,
 
     if (id <= 0)
     {
-        printf("Could not allocate task ID.\n");
+        log_error("task_id_alloc_failed", "Could not allocate task ID.");
         send_message(client_socket, "SUBMIT_REJECT");
         return 0;
     }
@@ -168,15 +169,18 @@ int coordinator_handle_submit(struct Runtime *runtime,
 
     if (!runtime_submit_task(runtime, &task))
     {
-        printf("runtime_submit_task rejected task %d.\n", id);
+        log_warn("task_rejected",
+                 "runtime_submit_task rejected task %d.",
+                 id);
         send_message(client_socket, "SUBMIT_REJECT");
         return 0;
     }
 
-    printf("Accepted task %d: %s argc=%d\n",
-           id,
-           task.command,
-           task.argument_count);
+    log_info("task_accepted",
+             "Accepted task %d: %s argc=%d",
+             id,
+             task.command,
+             task.argument_count);
 
     char response[64];
     int n = snprintf(response,
@@ -240,7 +244,9 @@ int coordinator_handle_task_request(struct Runtime *runtime,
 
     if (!coordinator_record_inflight(table, &task, selected->id))
     {
-        printf("In-flight table full; requeueing task %d.\n", task.id);
+        log_warn("inflight_full",
+                 "In-flight table full; requeueing task %d.",
+                 task.id);
         submit_task(runtime->task_manager, &task);
         send_message(worker_socket, "NO_TASK");
         return 0;
@@ -250,7 +256,9 @@ int coordinator_handle_task_request(struct Runtime *runtime,
 
     if (!build_task_assign(&task, assign, sizeof(assign)))
     {
-        printf("Could not build TASK_ASSIGN for task %d.\n", task.id);
+        log_error("assign_build_failed",
+                  "Could not build TASK_ASSIGN for task %d.",
+                  task.id);
         coordinator_take_inflight(table, task.id, NULL, NULL);
         submit_task(runtime->task_manager, &task);
         send_message(worker_socket, "NO_TASK");
@@ -259,13 +267,16 @@ int coordinator_handle_task_request(struct Runtime *runtime,
 
     if (!send_message(worker_socket, assign))
     {
-        printf("Failed to send TASK_ASSIGN for task %d.\n", task.id);
+        log_warn("assign_send_failed",
+                 "Failed to send TASK_ASSIGN for task %d.",
+                 task.id);
         return 0;
     }
 
-    printf("Dispatched task %d to worker %d.\n",
-           task.id,
-           selected->id);
+    log_info("task_dispatched",
+             "Dispatched task %d to worker %d.",
+             task.id,
+             selected->id);
 
     return 1;
 }
@@ -294,7 +305,9 @@ int coordinator_handle_task_result(struct Runtime *runtime,
 
     if (fields != 4)
     {
-        printf("Malformed TASK_RESULT: %s\n", message);
+        log_warn("result_malformed",
+                 "Malformed TASK_RESULT: %s",
+                 message);
         send_message(worker_socket, "UNKNOWN_COMMAND");
         return 0;
     }
@@ -307,9 +320,10 @@ int coordinator_handle_task_result(struct Runtime *runtime,
                                    &task,
                                    &original_worker))
     {
-        printf("Result for unknown task %d (worker %d).\n",
-               task_id,
-               worker_id);
+        log_warn("result_unknown_task",
+                 "Result for unknown task %d (worker %d).",
+                 task_id,
+                 worker_id);
 
         send_message(worker_socket, "TASK_RESULT_ACK");
         return 0;
@@ -324,11 +338,12 @@ int coordinator_handle_task_result(struct Runtime *runtime,
                                  exit_status,
                                  state);
 
-    printf("Result: task=%d worker=%d exit=%d state=%d\n",
-           task_id,
-           worker_id,
-           exit_status,
-           state);
+    log_info("task_result",
+             "Result: task=%d worker=%d exit=%d state=%d",
+             task_id,
+             worker_id,
+             exit_status,
+             state);
 
     if (task.state == TASK_COMPLETED)
     {
@@ -476,9 +491,10 @@ int coordinator_reap_dead_worker_tasks(struct Runtime *runtime,
 
         record_task_failed(&runtime->stats);
 
-        printf("Reaped in-flight task %d: worker %d not live.\n",
-               task_id,
-               reported_worker);
+        log_info("in_flight_task_reaped",
+                 "Reaped in-flight task %d: worker %d not live.",
+                 task_id,
+                 reported_worker);
 
         reaped++;
     }
