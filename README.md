@@ -198,12 +198,24 @@ language.
 - **No persistence.** In-flight tasks and the completed ring live
   in memory. A coordinator restart loses both. Completed entries
   age out after 64 newer completions.
-- **At-most-once dispatch.** The coordinator does not retry a task
-  whose worker died. A task with external side effects must not be
-  silently re-executed without coordination, and there is no such
-  coordination here. When a worker goes silent mid-task, the task
-  is marked `TASK_FAILED` and stays failed.
-- **Task-runner crash without heartbeat loss is not detected.** If
+- **At-least-once for idempotent tasks; at-most-once for the
+  rest.** A dispatched task is not trusted until the worker
+  sends `TASK_ACCEPT`. If no accept arrives within
+  `DISPATCH_TIMEOUT_SECONDS` (15), the coordinator checks the
+  task's `idempotent` flag. Idempotent tasks (`SUBMIT|...|1`)
+  are re-queued and re-dispatched. Non-idempotent tasks
+  (`SUBMIT|...|0`, the default) are marked `TASK_FAILED` with
+  `exit_status = -1` and are not retried. A task with external
+  side effects (email, payment, file write) must be submitted
+  as non-idempotent.
+- **Worker-side task-runner crash without heartbeat loss is not
+  detected.** If the worker's heartbeat continues but its
+  forked task-runner child segfaults, the coordinator will not
+  notice. The reaper in this version fires on missing
+  `TASK_ACCEPT` and on missing heartbeats; it does not fire on
+  a task whose worker is alive but whose executor is dead.
+  Detecting that requires per-task execution timeouts or a
+  worker-side signal.- **Task-runner crash without heartbeat loss is not detected.** If
   the worker's heartbeat continues but its forked task-runner child
   segfaults, the coordinator will not notice. Detecting this
   requires per-task timeouts or a worker-side signal, neither of
