@@ -14,6 +14,7 @@
 #include "coordinator_tasks.h"
 #include "coordinator_handlers.h"
 #include "connection_pool.h"
+#include "log.h"
 
 #define MAX_POLLFDS (CONNECTION_POOL_CAPACITY + 1)
 
@@ -29,8 +30,9 @@ static int handle_worker_message(
     int worker_socket,
     const char *message)
 {
-    printf(
-        "Received: %s\n",
+    log_debug(
+        "message_received",
+        "Received: %s",
         message
     );
 
@@ -50,8 +52,9 @@ static int handle_worker_message(
                 message,
                 &worker))
         {
-            printf(
-                "Invalid worker registration.\n"
+            log_warn(
+                "registration_invalid",
+                "Invalid worker registration."
             );
 
             send_message(
@@ -62,21 +65,11 @@ static int handle_worker_message(
             return 0;
         }
 
-        printf("\n");
-        printf("Worker registration:\n");
-
-        printf(
-            "Worker ID      : %d\n",
-            worker.id
-        );
-
-        printf(
-            "Total CPU      : %.2f%%\n",
-            worker.resources.total_cpu_percent
-        );
-
-        printf(
-            "Total Memory   : %ld MB\n",
+        log_info(
+            "worker_registration",
+            "Worker registration: id=%d cpu=%.2f%% mem_mb=%ld",
+            worker.id,
+            worker.resources.total_cpu_percent,
             worker.resources.total_memory_mb
         );
 
@@ -84,8 +77,9 @@ static int handle_worker_message(
                 runtime,
                 &worker))
         {
-            printf(
-                "Failed to register worker.\n"
+            log_warn(
+                "registration_failed",
+                "Failed to register worker."
             );
 
             send_message(
@@ -96,23 +90,26 @@ static int handle_worker_message(
             return 0;
         }
 
-        printf(
-            "Worker registered with runtime. ✅\n"
+        log_info(
+            "worker_registered",
+            "Worker registered with runtime. ✅"
         );
 
         if (!send_message(
                 worker_socket,
                 "REGISTER_ACK"))
         {
-            printf(
-                "Failed to send registration acknowledgement.\n"
+            log_warn(
+                "register_ack_failed",
+                "Failed to send registration acknowledgement."
             );
 
             return 0;
         }
 
-        printf(
-            "Sent: REGISTER_ACK\n"
+        log_debug(
+            "register_ack_sent",
+            "Sent: REGISTER_ACK"
         );
 
         return 1;
@@ -134,8 +131,9 @@ static int handle_worker_message(
                 message,
                 &worker_id))
         {
-            printf(
-                "Invalid heartbeat message.\n"
+            log_warn(
+                "heartbeat_invalid",
+                "Invalid heartbeat message."
             );
 
             send_message(
@@ -146,8 +144,9 @@ static int handle_worker_message(
             return 0;
         }
 
-        printf(
-            "Heartbeat received from worker %d.\n",
+        log_debug(
+            "heartbeat_received",
+            "Heartbeat received from worker %d.",
             worker_id
         );
 
@@ -155,8 +154,9 @@ static int handle_worker_message(
                 &runtime->registry,
                 worker_id))
         {
-            printf(
-                "Unknown worker: %d\n",
+            log_warn(
+                "heartbeat_unknown_worker",
+                "Unknown worker: %d",
                 worker_id
             );
 
@@ -172,15 +172,17 @@ static int handle_worker_message(
                 worker_socket,
                 "HEARTBEAT_ACK"))
         {
-            printf(
-                "Failed to send heartbeat acknowledgement.\n"
+            log_warn(
+                "heartbeat_ack_failed",
+                "Failed to send heartbeat acknowledgement."
             );
 
             return 0;
         }
 
-        printf(
-            "Sent: HEARTBEAT_ACK\n"
+        log_debug(
+            "heartbeat_ack_sent",
+            "Sent: HEARTBEAT_ACK"
         );
 
         return 1;
@@ -261,8 +263,9 @@ static int handle_worker_message(
     /*
      * Unknown message.
      */
-    printf(
-        "Unknown message: %s\n",
+    log_warn(
+        "message_unknown",
+        "Unknown message: %s",
         message
     );
 
@@ -428,14 +431,18 @@ int start_runtime_server(
                     break;
                 }
 
-                printf("\nConnection accepted.\n");
+                log_debug(
+                    "connection_accepted",
+                    "Connection accepted."
+                );
 
                 int idx = pool_add(&pool, client_socket);
 
                 if (idx < 0)
                 {
-                    printf(
-                        "Connection pool full; rejecting.\n"
+                    log_warn(
+                        "pool_full",
+                        "Connection pool full; rejecting."
                     );
                     close(client_socket);
                 }
@@ -510,8 +517,9 @@ int start_runtime_server(
 
         if (expired > 0)
         {
-            printf(
-                "Idle connections closed: %d\n",
+            log_info(
+                "idle_connections_closed",
+                "Idle connections closed: %d",
                 expired
             );
         }
@@ -523,8 +531,9 @@ int start_runtime_server(
 
         if (stale_workers > 0)
         {
-            printf(
-                "Workers marked unavailable: %d\n",
+            log_info(
+                "workers_marked_unavailable",
+                "Workers marked unavailable: %d",
                 stale_workers
             );
         }
@@ -536,8 +545,9 @@ int start_runtime_server(
 
         if (reaped > 0)
         {
-            printf(
-                "Reaped in-flight tasks from unavailable workers: %d\n",
+            log_info(
+                "in_flight_reaped",
+                "Reaped in-flight tasks from unavailable workers: %d",
                 reaped
             );
         }
