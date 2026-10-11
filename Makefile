@@ -13,6 +13,7 @@ COMMON_SRCS = \
     src/wire_fields.c
 
 COORDINATOR_SRCS = \
+    src/log.c \
     $(COMMON_SRCS) \
     src/runtime_server_main.c \
     src/runtime_server.c \
@@ -35,6 +36,7 @@ COORDINATOR_SRCS = \
     src/connection_pool.c
 
 WORKER_SRCS = \
+    src/log.c \
     $(COMMON_SRCS) \
     src/worker_agent.c \
     src/worker.c \
@@ -145,6 +147,9 @@ test:
 	    src/connection_pool.c src/network_protocol.c \
 	    -o $(BUILD)/connection_pool_test
 	$(BUILD)/connection_pool_test
+	@echo ""
+	@echo "===== log_test.sh ====="
+	bash tests/log_test.sh
 	@echo ""
 	@echo "===== remote_exec_e2e_test.sh ====="
 	bash tests/remote_exec_e2e_test.sh
