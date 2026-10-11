@@ -80,37 +80,19 @@ Example: submitting `echo hello world` produces the wire message
 Everything builds with `gcc -Wall -Wextra`. No external
 dependencies beyond libc and POSIX.
 
-### Coordinator
+    make          # coordinator, worker, and both clients -> build/
+    make asan     # same, with AddressSanitizer + UBSan -> build/asan/
+    make test     # run unit + integration tests
+    make clean    # remove build/
+    make help     # target list
 
-    gcc -Wall -Wextra \
-        src/runtime_server_main.c src/runtime_server.c src/runtime.c \
-        src/worker_registry.c src/task_manager.c src/task_queue.c \
-        src/scheduler.c src/worker_pool.c src/worker.c src/worker_resources.c \
-        src/process_info.c src/cpu_monitor.c src/task_executor.c src/task_metrics.c \
-        src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
-        src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
-        src/connection_pool.c \
-        -o runtime_server
+The coordinator binary is at `build/runtime_server`, the worker at
+`build/worker_agent`, and the clients at `build/client_submit` and
+`build/client_query`.
 
-### Worker
-
-    gcc -Wall -Wextra -Isrc \
-        src/worker_agent.c src/worker.c src/worker_resources.c \
-        src/process_info.c src/cpu_monitor.c \
-        src/worker_registration.c src/worker_registration_client.c \
-        src/worker_task_client.c src/wire_fields.c \
-        src/task_executor.c src/task_metrics.c src/network_protocol.c \
-        -o worker_agent
-
-### Clients
-
-    gcc -Wall -Wextra -Isrc \
-        tests/client_submit.c src/network_protocol.c src/wire_fields.c \
-        -o client_submit
-
-    gcc -Wall -Wextra -Isrc \
-        tests/client_query.c src/network_protocol.c \
-        -o client_query
+To reproduce the exact gcc commands the Makefile runs, see the
+`COORDINATOR_SRCS`, `WORKER_SRCS`, `CLIENT_SUBMIT_SRCS`, and
+`CLIENT_QUERY_SRCS` variables at the top of `Makefile`.
 
 ## Running
 

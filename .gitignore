@@ -16,3 +16,6 @@ digit_test
 proc_list
 process_manager
 process_monitor
+
+# Makefile build output
+build/
