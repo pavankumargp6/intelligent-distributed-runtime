@@ -9,6 +9,7 @@
 #include "runtime_stats.h"
 #include "worker_registry.h"
 #include "log.h"
+#include "wal.h"
 
 static int parse_submit(const char *message,
                         struct Task *task)
@@ -137,6 +138,68 @@ static int build_task_assign(const struct Task *task,
     return 1;
 }
 
+/*
+ * Build a WAL SUBMIT record:
+ *
+ *   SUBMIT|<task_id>|<cmd_len>:<cmd>|<argc>|<a1_len>:<a1>|...
+ *
+ * Uses the same length-prefixed field encoding as the wire
+ * protocol so commands and arguments containing '|' or
+ * newlines cannot corrupt the record boundary.
+ */
+static int build_wal_submit(const struct Task *task,
+                            char *buffer,
+                            size_t buffer_size)
+{
+    const char *prefix = "SUBMIT";
+    size_t prefix_length = strlen(prefix);
+
+    if (prefix_length + 1 > buffer_size)
+    {
+        return 0;
+    }
+
+    memcpy(buffer, prefix, prefix_length);
+    buffer[prefix_length] = '\0';
+
+    size_t offset = prefix_length;
+
+    offset = wire_append_delimiter(buffer, buffer_size, offset);
+    if (offset == 0) return 0;
+
+    offset = wire_append_int(buffer, buffer_size, offset, task->id);
+    if (offset == 0) return 0;
+
+    offset = wire_append_delimiter(buffer, buffer_size, offset);
+    if (offset == 0) return 0;
+
+    offset = wire_append_field(buffer, buffer_size, offset, task->command);
+    if (offset == 0) return 0;
+
+    offset = wire_append_delimiter(buffer, buffer_size, offset);
+    if (offset == 0) return 0;
+
+    offset = wire_append_int(buffer,
+                             buffer_size,
+                             offset,
+                             task->argument_count);
+    if (offset == 0) return 0;
+
+    for (int i = 0; i < task->argument_count; i++)
+    {
+        offset = wire_append_delimiter(buffer, buffer_size, offset);
+        if (offset == 0) return 0;
+
+        offset = wire_append_field(buffer,
+                                   buffer_size,
+                                   offset,
+                                   task->arguments[i]);
+        if (offset == 0) return 0;
+    }
+
+    return 1;
+}
+
 int coordinator_handle_submit(struct Runtime *runtime,
                               struct InFlightTable *table,
                               int client_socket,
@@ -166,6 +229,40 @@ int coordinator_handle_submit(struct Runtime *runtime,
     }
 
     task.id = id;
+
+    /*
+     * Fail early if the queue is full. We must not write a WAL
+     * record for a task we are about to reject.
+     */
+    if (is_task_queue_full(&runtime->task_manager->queue))
+    {
+        log_warn("queue_full", "Task queue full; rejecting task %d.", id);
+        send_message(client_socket, "SUBMIT_REJECT");
+        return 0;
+    }
+
+    /*
+     * WAL the submission before queuing, so the task is durable
+     * once we ack. If the append fails we reject rather than
+     * accept a task that would be lost on coordinator restart.
+     */
+    char wal_line[NETWORK_MAX_MESSAGE_SIZE];
+
+    if (!build_wal_submit(&task, wal_line, sizeof(wal_line)))
+    {
+        log_error("wal_build_failed",
+                  "Could not build WAL record for task %d.", id);
+        send_message(client_socket, "SUBMIT_REJECT");
+        return 0;
+    }
+
+    if (!wal_append(&runtime->wal, wal_line))
+    {
+        log_error("wal_append_failed",
+                  "Could not append WAL record for task %d.", id);
+        send_message(client_socket, "SUBMIT_REJECT");
+        return 0;
+    }
 
     if (!runtime_submit_task(runtime, &task))
     {
@@ -335,6 +432,32 @@ int coordinator_handle_task_result(struct Runtime *runtime,
     task.state = (enum TaskState)state;
 
     record_task_completion(&task.metrics);
+
+    /*
+     * WAL the result before recording it in the completed ring.
+     * If the coordinator crashes between here and the ring
+     * update, recovery will replay the result and the task
+     * ends up in the ring either way.
+     */
+    char wal_line[128];
+
+    int n_wal = snprintf(wal_line,
+                         sizeof(wal_line),
+                         "RESULT|%d|%d|%d|%d",
+                         task_id,
+                         worker_id,
+                         exit_status,
+                         state);
+
+    if (n_wal > 0 && (size_t)n_wal < sizeof(wal_line))
+    {
+        if (!wal_append(&runtime->wal, wal_line))
+        {
+            log_warn("wal_append_failed",
+                     "Could not append RESULT record for task %d.",
+                     task_id);
+        }
+    }
 
     coordinator_record_completed(table,
                                  task_id,

@@ -8,6 +8,7 @@
 #include "task_metrics.h"
 #include "runtime_stats.h"
 #include "worker_registry.h"
+#include "wal.h"
 
 /*
  * Top-level controller for the
@@ -31,31 +32,25 @@ struct Runtime
      * Runtime-wide performance statistics.
      */
     struct RuntimeStats stats;
+
+    /*
+     * Write-ahead log for task submissions and results.
+     * Opened by start_runtime_server; -1 fd means no
+     * persistence (submissions are queued but not durable).
+     */
+    struct Wal wal;
 };
 
-/*
- * Submit a task to the runtime.
- */
 int runtime_submit_task(struct Runtime *runtime,
                         struct Task *task);
 
-/*
- * Schedule and execute the next
- * available task.
- */
 int runtime_run_next_task(struct Runtime *runtime);
 
-/*
- * Initialize the runtime.
- */
 void initialize_runtime(struct Runtime *runtime,
                         struct TaskManager *task_manager,
                         struct Scheduler *scheduler,
                         struct WorkerPool *worker_pool);
 
-/*
- * Register a worker with the runtime.
- */
 int runtime_register_worker(
     struct Runtime *runtime,
     struct Worker *worker);

@@ -11,6 +11,7 @@ COMMON_SRCS = \
 COORDINATOR_SRCS = \
     src/log.c \
     src/wal.c \
+    src/recovery.c \
     $(COMMON_SRCS) \
     src/runtime_server_main.c \
     src/runtime_server.c \
@@ -160,6 +161,9 @@ test:
 	@echo ""
 	@echo "===== status_test.sh ====="
 	bash tests/status_test.sh
+	@echo ""
+	@echo "===== wal_recovery_test.sh ====="
+	bash tests/wal_recovery_test.sh
 	@echo ""
 	@echo "All tests passed."
 
