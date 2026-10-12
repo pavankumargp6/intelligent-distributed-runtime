@@ -150,6 +150,9 @@ test:
 	@echo "===== worker_resources_test.sh ====="
 	bash tests/worker_resources_test.sh
 	@echo ""
+	@echo "===== cpu_monitor_test.sh ====="
+	bash tests/cpu_monitor_test.sh
+	@echo ""
 	@echo "===== remote_exec_e2e_test.sh ====="
 	bash tests/remote_exec_e2e_test.sh
 	@echo ""
