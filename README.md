@@ -113,6 +113,17 @@ worker and client sources):
     ./client_submit echo hello world     # Response: SUBMIT_ACK|1
     ./client_query 1                     # Response: QUERY_RESULT|1|1|0|2
 
+By default the coordinator binds to `127.0.0.1` and is only
+reachable from the local host. To accept connections from other
+machines, set `IDR_BIND_ADDR=0.0.0.0` (or a specific local
+address) before starting the coordinator:
+
+    IDR_BIND_ADDR=0.0.0.0 ./build/runtime_server
+
+There is no authentication, so opening the port exposes workers
+to command execution from anyone who can reach the coordinator.
+Do this only on a trusted network.
+
 If you submit before any worker is running, the task is queued and
 dispatched when a worker registers.
 

@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "runtime_server.h"
 #include "network_protocol.h"
@@ -21,6 +22,7 @@
 
 #define MAX_POLLFDS (CONNECTION_POOL_CAPACITY + 1)
 #define DEFAULT_WAL_PATH "./idr-wal.log"
+#define DEFAULT_BIND_ADDR "127.0.0.1"
 
 static int handle_worker_message(
     struct Runtime *runtime,
@@ -222,11 +224,39 @@ int start_runtime_server(
         return 0;
     }
 
+    /*
+     * Bind loopback by default. IDR_BIND_ADDR overrides:
+     *
+     *   IDR_BIND_ADDR=0.0.0.0      accept from any interface
+     *   IDR_BIND_ADDR=192.168.x.y  accept on one interface
+     *
+     * Default 127.0.0.1 means the coordinator is only reachable
+     * from the local host unless explicitly opened. This is
+     * deliberate: the runtime executes operating-system commands
+     * on workers without authenticating the client, so the
+     * default posture is "not on the network."
+     */
+    const char *bind_addr = getenv("IDR_BIND_ADDR");
+    if (bind_addr == NULL || bind_addr[0] == '\0')
+    {
+        bind_addr = DEFAULT_BIND_ADDR;
+    }
+
     struct sockaddr_in server_address = {0};
 
     server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
     server_address.sin_port = htons(port);
+
+    if (inet_pton(AF_INET, bind_addr,
+                  &server_address.sin_addr) != 1)
+    {
+        log_error("bind_addr_invalid",
+                  "IDR_BIND_ADDR is not a valid IPv4 address: %s",
+                  bind_addr);
+        close(server_socket);
+        wal_close(&runtime->wal);
+        return 0;
+    }
 
     if (bind(server_socket,
              (struct sockaddr *)&server_address,
@@ -250,9 +280,15 @@ int start_runtime_server(
     printf("========================================\n");
     printf("        RUNTIME TCP COORDINATOR\n");
     printf("========================================\n");
+    printf("Bind   : %s\n", bind_addr);
     printf("Port   : %d\n", port);
     printf("Status : LISTENING\n");
     printf("========================================\n");
+
+    log_info("coordinator_listening",
+             "Listening on %s:%d",
+             bind_addr,
+             port);
 
     struct pollfd pollfds[MAX_POLLFDS];
     const int poll_timeout_ms = 1000;
