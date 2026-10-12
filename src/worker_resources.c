@@ -3,6 +3,7 @@
 
 #include "worker_resources.h"
 #include "task.h"
+#include "log.h"
 
 /*
  * Read system-wide CPU time counters from /proc/stat.
@@ -82,6 +83,10 @@ static int read_system_cpu_ticks(long *total_ticks,
 /*
  * Collect the current resources available
  * on this worker node.
+ *
+ * Always leaves *resources in a defined state: on failure,
+ * the four fields are zero and the caller sees available = 0,
+ * which the scheduler treats as "cannot accept tasks".
  */
 int collect_worker_resources(struct WorkerResources *resources)
 {
@@ -91,27 +96,35 @@ int collect_worker_resources(struct WorkerResources *resources)
     }
 
     /*
-     * Get the number of CPUs currently available.
-     *
-     * Each CPU contributes 100% capacity.
+     * Initialize the output first. Every failure path below
+     * returns with these values zero, so a caller that ignores
+     * the return value still sees a well-defined "no capacity"
+     * worker rather than uninitialized memory.
      */
+    resources->total_cpu_percent = 0.0;
+    resources->available_cpu_percent = 0.0;
+    resources->total_memory_mb = 0;
+    resources->available_memory_mb = 0;
+
     long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
 
     if (cpu_count <= 0)
     {
+        log_warn("resources_cpu_count_failed",
+                 "sysconf(_SC_NPROCESSORS_ONLN) returned %ld",
+                 cpu_count);
         return 0;
     }
 
     resources->total_cpu_percent =
         (double)cpu_count * 100.0;
 
-    /*
-     * Read memory information from /proc/meminfo.
-     */
     FILE *file = fopen("/proc/meminfo", "r");
 
     if (file == NULL)
     {
+        log_warn("resources_meminfo_open_failed",
+                 "Could not open /proc/meminfo");
         return 0;
     }
 
@@ -119,6 +132,7 @@ int collect_worker_resources(struct WorkerResources *resources)
 
     long total_memory_kb = 0;
     long available_memory_kb = 0;
+    int mem_available_found = 0;
 
     while (fgets(line, sizeof(line), file))
     {
@@ -133,15 +147,35 @@ int collect_worker_resources(struct WorkerResources *resources)
                    "MemAvailable: %ld kB",
                    &available_memory_kb) == 1)
         {
+            mem_available_found = 1;
             continue;
         }
     }
 
     fclose(file);
 
-    if (total_memory_kb <= 0 ||
-        available_memory_kb < 0)
+    if (total_memory_kb <= 0)
     {
+        log_warn("resources_meminfo_parse_failed",
+                 "Could not parse MemTotal from /proc/meminfo");
+        return 0;
+    }
+
+    if (!mem_available_found)
+    {
+        log_warn("resources_memavailable_missing",
+                 "Kernel does not expose MemAvailable in "
+                 "/proc/meminfo; cannot report available memory. "
+                 "Requires Linux 3.14 or newer.");
+        return 0;
+    }
+
+    if (available_memory_kb <= 0)
+    {
+        log_warn("resources_no_free_memory",
+                 "MemAvailable is %ld kB; "
+                 "worker has no free memory to offer",
+                 available_memory_kb);
         return 0;
     }
 
@@ -164,6 +198,11 @@ int collect_worker_resources(struct WorkerResources *resources)
             &start_total_ticks,
             &start_idle_ticks))
     {
+        log_warn("resources_cpu_sample_failed",
+                 "Could not read /proc/stat");
+        resources->total_cpu_percent = 0.0;
+        resources->total_memory_mb = 0;
+        resources->available_memory_mb = 0;
         return 0;
     }
 
@@ -183,6 +222,11 @@ int collect_worker_resources(struct WorkerResources *resources)
             &end_total_ticks,
             &end_idle_ticks))
     {
+        log_warn("resources_cpu_sample_failed",
+                 "Could not read /proc/stat on second sample");
+        resources->total_cpu_percent = 0.0;
+        resources->total_memory_mb = 0;
+        resources->available_memory_mb = 0;
         return 0;
     }
 
@@ -195,6 +239,13 @@ int collect_worker_resources(struct WorkerResources *resources)
     if (total_difference <= 0 ||
         idle_difference < 0)
     {
+        log_warn("resources_cpu_delta_invalid",
+                 "CPU tick delta invalid: total=%ld idle=%ld",
+                 total_difference,
+                 idle_difference);
+        resources->total_cpu_percent = 0.0;
+        resources->total_memory_mb = 0;
+        resources->available_memory_mb = 0;
         return 0;
     }
 

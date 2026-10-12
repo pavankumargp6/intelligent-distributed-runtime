@@ -147,6 +147,9 @@ test:
 	@echo "===== wal_test.sh ====="
 	bash tests/wal_test.sh
 	@echo ""
+	@echo "===== worker_resources_test.sh ====="
+	bash tests/worker_resources_test.sh
+	@echo ""
 	@echo "===== remote_exec_e2e_test.sh ====="
 	bash tests/remote_exec_e2e_test.sh
 	@echo ""
