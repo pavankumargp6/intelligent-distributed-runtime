@@ -1,17 +1,12 @@
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "recovery.h"
 #include "wal.h"
 #include "wire_fields.h"
 #include "log.h"
 
-/*
- * Bounded recovery buffer. The WAL grows forever until we add
- * compaction (later phase), so cap what recovery will hold in
- * memory. If exceeded, we log a warning and stop collecting;
- * older records are not replayed.
- */
 #define RECOVERY_MAX_TASKS 4096
 
 struct RecoveredSubmit
@@ -113,10 +108,6 @@ static int parse_submit_record(const char *line,
 
     task.argument_count = (int)argc;
 
-    /*
-     * Optional trailing idempotent flag. Absent in records
-     * written by pre-4c versions; default 0.
-     */
     if (*cursor == '|')
     {
         cursor++;
@@ -126,6 +117,7 @@ static int parse_submit_record(const char *line,
             task.idempotent = idem ? 1 : 0;
         }
     }
+
     *task_id_out = (int)task_id;
     *task_out = task;
 
@@ -317,4 +309,230 @@ int recovery_replay_wal(struct Runtime *runtime,
              path);
 
     return requeued + completed;
+}
+
+struct CompactEntry
+{
+    int task_id;
+    int has_submit;
+    int has_result;
+};
+
+struct CompactIndex
+{
+    struct CompactEntry entries[RECOVERY_MAX_TASKS];
+    int count;
+};
+
+static int compact_index_find(struct CompactIndex *idx,
+                              int task_id)
+{
+    for (int i = 0; i < idx->count; i++)
+    {
+        if (idx->entries[i].task_id == task_id)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+static int compact_index_upsert(struct CompactIndex *idx,
+                                int task_id,
+                                int has_submit,
+                                int has_result)
+{
+    int pos = compact_index_find(idx, task_id);
+
+    if (pos >= 0)
+    {
+        if (has_submit)
+        {
+            idx->entries[pos].has_submit = 1;
+        }
+        if (has_result)
+        {
+            idx->entries[pos].has_result = 1;
+        }
+        return 1;
+    }
+
+    if (idx->count >= RECOVERY_MAX_TASKS)
+    {
+        return 0;
+    }
+
+    idx->entries[idx->count].task_id = task_id;
+    idx->entries[idx->count].has_submit = has_submit;
+    idx->entries[idx->count].has_result = has_result;
+    idx->count++;
+
+    return 1;
+}
+
+static int compact_scan_cb(const char *line, void *user)
+{
+    struct CompactIndex *idx = user;
+    int task_id = 0;
+
+    if (sscanf(line, "SUBMIT|%d", &task_id) == 1)
+    {
+        compact_index_upsert(idx, task_id, 1, 0);
+    }
+    else if (sscanf(line, "RESULT|%d", &task_id) == 1)
+    {
+        compact_index_upsert(idx, task_id, 0, 1);
+    }
+
+    return 1;
+}
+
+struct CompactWriteCtx
+{
+    struct CompactIndex *idx;
+    FILE *out;
+    int lines_written;
+};
+
+static int compact_write_cb(const char *line, void *user)
+{
+    struct CompactWriteCtx *wctx = user;
+    int task_id = 0;
+    int is_result = 0;
+
+    if (sscanf(line, "SUBMIT|%d", &task_id) == 1)
+    {
+        is_result = 0;
+    }
+    else if (sscanf(line, "RESULT|%d", &task_id) == 1)
+    {
+        is_result = 1;
+    }
+    else
+    {
+        return 1;
+    }
+
+    int pos = compact_index_find(wctx->idx, task_id);
+
+    if (pos < 0)
+    {
+        return 1;
+    }
+
+    int keep = 0;
+
+    if (is_result)
+    {
+        keep = 1;
+    }
+    else if (!wctx->idx->entries[pos].has_result)
+    {
+        keep = 1;
+    }
+
+    if (keep)
+    {
+        fprintf(wctx->out, "%s\n", line);
+        wctx->lines_written++;
+    }
+
+    return 1;
+}
+
+int recovery_compact_wal(const char *path)
+{
+    if (path == NULL)
+    {
+        return 0;
+    }
+
+    if (access(path, F_OK) != 0)
+    {
+        return 1;
+    }
+
+    static struct CompactIndex idx;
+    memset(&idx, 0, sizeof(idx));
+
+    if (wal_foreach_line(path, compact_scan_cb, &idx) < 0)
+    {
+        log_error("wal_compact_scan_failed",
+                  "Could not scan WAL at %s", path);
+        return 0;
+    }
+
+    char tmp_path[512];
+    int n = snprintf(tmp_path,
+                     sizeof(tmp_path),
+                     "%s.compact",
+                     path);
+
+    if (n <= 0 || (size_t)n >= sizeof(tmp_path))
+    {
+        log_error("wal_compact_path_too_long",
+                  "Cannot build temp path for %s", path);
+        return 0;
+    }
+
+    FILE *out = fopen(tmp_path, "w");
+
+    if (out == NULL)
+    {
+        log_error("wal_compact_open_failed",
+                  "Could not open %s for writing", tmp_path);
+        return 0;
+    }
+
+    struct CompactWriteCtx wctx = {
+        .idx = &idx,
+        .out = out,
+        .lines_written = 0
+    };
+
+    if (wal_foreach_line(path, compact_write_cb, &wctx) < 0)
+    {
+        fclose(out);
+        unlink(tmp_path);
+        return 0;
+    }
+
+    if (fflush(out) != 0)
+    {
+        fclose(out);
+        unlink(tmp_path);
+        return 0;
+    }
+
+    if (fsync(fileno(out)) != 0)
+    {
+        fclose(out);
+        unlink(tmp_path);
+        return 0;
+    }
+
+    if (fclose(out) != 0)
+    {
+        unlink(tmp_path);
+        return 0;
+    }
+
+    if (rename(tmp_path, path) != 0)
+    {
+        log_error("wal_compact_rename_failed",
+                  "Could not rename %s to %s",
+                  tmp_path,
+                  path);
+        unlink(tmp_path);
+        return 0;
+    }
+
+    log_info("wal_compacted",
+             "Compacted WAL at %s: %d unique tasks, %d lines",
+             path,
+             idx.count,
+             wctx.lines_written);
+
+    return 1;
 }
