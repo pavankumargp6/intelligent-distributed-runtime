@@ -8,7 +8,8 @@
 #   4. SIGKILL the coordinator.
 #   5. Restart with the same WAL path.
 #   6. STATUS -> submitted=3, queue=3 (recovered from WAL).
-#   7. Submit a 4th task and verify it gets id=4 (no ID collision).
+#   7. WAL is compacted: contains exactly 3 lines.
+#   8. Submit a 4th task, verify it gets id=4.
 
 set -u
 
@@ -132,6 +133,14 @@ if ! printf '%s' "$OUT2" | grep -q 'submitted=3'; then
 fi
 if ! printf '%s' "$OUT2" | grep -q 'queue=3'; then
     echo "FAIL: expected queue=3 after recovery"
+    exit 1
+fi
+
+echo "===== WAL size after restart ====="
+AFTER_LINES=$(wc -l < "$WAL_PATH")
+echo "WAL line count after restart: $AFTER_LINES"
+if [ "$AFTER_LINES" -ne 3 ]; then
+    echo "FAIL: expected 3 lines after compaction, got $AFTER_LINES"
     exit 1
 fi
 

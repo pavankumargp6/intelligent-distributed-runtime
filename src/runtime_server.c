@@ -173,6 +173,24 @@ int start_runtime_server(
 
     runtime->wal.fd = -1;
 
+    /*
+     * Compact the WAL before opening it for append.
+     *
+     * Compaction rewrites the file with only live records:
+     * RESULTs for completed tasks, SUBMITs for tasks still
+     * pending. It writes to a temporary file and renames, so
+     * the original WAL is untouched if compaction fails.
+     *
+     * Best-effort: log a warning on failure and continue. The
+     * un-compacted WAL is still valid; replay will read it.
+     */
+    if (!recovery_compact_wal(wal_path))
+    {
+        log_warn("wal_compact_skipped",
+                 "Could not compact WAL at %s; continuing with original",
+                 wal_path);
+    }
+
     if (!wal_open_for_append(&runtime->wal, wal_path))
     {
         log_error("wal_open_failed",
@@ -355,9 +373,6 @@ int start_runtime_server(
 
             if (slot < 0) continue;
 
-            /*
-             * Read phase: parse one complete message, dispatch.
-             */
             if (revents & (POLLIN | POLLHUP | POLLERR))
             {
                 int step = pool_step(&pool.conns[slot]);
@@ -378,20 +393,10 @@ int start_runtime_server(
                                           &pool.conns[slot],
                                           payload);
 
-                    /*
-                     * Every request produces at most one
-                     * response. Mark the connection as
-                     * closing; if the response is fully
-                     * flushed already, close now. Otherwise
-                     * POLLOUT will finish it next tick.
-                     */
                     pool.conns[slot].closing_after_flush = 1;
                 }
             }
 
-            /*
-             * Write phase: drain any pending outbound bytes.
-             */
             if (pool.conns[slot].send_offset <
                 pool.conns[slot].send_length)
             {
@@ -402,10 +407,6 @@ int start_runtime_server(
                 }
             }
 
-            /*
-             * Close once we've flushed the response and the
-             * connection is marked closing.
-             */
             if (pool.conns[slot].closing_after_flush &&
                 pool.conns[slot].send_offset ==
                 pool.conns[slot].send_length)

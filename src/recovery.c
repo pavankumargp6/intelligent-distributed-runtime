@@ -253,11 +253,24 @@ int recovery_replay_wal(struct Runtime *runtime,
         return -1;
     }
 
+    /*
+     * Refuse to start if the WAL exceeds our recovery capacity.
+     *
+     * The previous behavior was to log a warning and continue
+     * with a partially-recovered state, silently dropping older
+     * tasks. That is not acceptable for a durability feature:
+     * losing tasks without telling anyone is worse than failing
+     * loudly.
+     */
     if (ctx.overflow)
     {
-        log_warn("wal_recovery_truncated",
-                 "WAL exceeded %d records; older entries not replayed",
-                 RECOVERY_MAX_TASKS);
+        log_error("wal_recovery_overflow",
+                  "WAL at %s has more than %d records; refusing to "
+                  "recover. Compact the WAL or reduce the workload "
+                  "before restarting.",
+                  path,
+                  RECOVERY_MAX_TASKS);
+        return -1;
     }
 
     int requeued = 0;
@@ -322,6 +335,15 @@ struct CompactIndex
 {
     struct CompactEntry entries[RECOVERY_MAX_TASKS];
     int count;
+
+    /*
+     * Set when a unique task_id arrives that does not fit in
+     * entries[]. If this happens, compaction refuses to run —
+     * silently dropping the extra records would leave the
+     * coordinator running with less state than the WAL
+     * represents.
+     */
+    int overflow;
 };
 
 static int compact_index_find(struct CompactIndex *idx,
@@ -360,6 +382,7 @@ static int compact_index_upsert(struct CompactIndex *idx,
 
     if (idx->count >= RECOVERY_MAX_TASKS)
     {
+        idx->overflow = 1;
         return 0;
     }
 
@@ -460,6 +483,16 @@ int recovery_compact_wal(const char *path)
     {
         log_error("wal_compact_scan_failed",
                   "Could not scan WAL at %s", path);
+        return 0;
+    }
+
+    if (idx.overflow)
+    {
+        log_error("wal_compact_index_full",
+                  "WAL at %s has more than %d unique tasks; "
+                  "cannot compact safely",
+                  path,
+                  RECOVERY_MAX_TASKS);
         return 0;
     }
 

@@ -150,6 +150,9 @@ test:
 	@echo "===== recovery_compact_test.sh ====="
 	bash tests/recovery_compact_test.sh
 	@echo ""
+	@echo "===== wal_overflow_test.sh ====="
+	bash tests/wal_overflow_test.sh
+	@echo ""
 	@echo "===== worker_resources_test.sh ====="
 	bash tests/worker_resources_test.sh
 	@echo ""
