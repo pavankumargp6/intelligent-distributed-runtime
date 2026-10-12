@@ -8,6 +8,7 @@
 #include "task_manager.h"
 #include "runtime_stats.h"
 #include "worker_registry.h"
+#include "connection_pool.h"
 #include "log.h"
 #include "wal.h"
 
@@ -209,15 +210,17 @@ static int build_wal_submit(const struct Task *task,
 
     offset = wire_append_int(buffer, buffer_size, offset, task->idempotent);
     if (offset == 0) return 0;
+
     return 1;
 }
 
 int coordinator_handle_submit(struct Runtime *runtime,
                               struct InFlightTable *table,
-                              int client_socket,
+                              struct Connection *conn,
                               const char *message)
 {
-    if (runtime == NULL || table == NULL || message == NULL)
+    if (runtime == NULL || table == NULL || conn == NULL ||
+        message == NULL)
     {
         return 0;
     }
@@ -227,7 +230,7 @@ int coordinator_handle_submit(struct Runtime *runtime,
     if (!parse_submit(message, &task))
     {
         log_warn("submit_invalid", "Invalid SUBMIT message.");
-        send_message(client_socket, "SUBMIT_REJECT");
+        pool_send_message(conn, "SUBMIT_REJECT");
         return 0;
     }
 
@@ -236,7 +239,7 @@ int coordinator_handle_submit(struct Runtime *runtime,
     if (id <= 0)
     {
         log_error("task_id_alloc_failed", "Could not allocate task ID.");
-        send_message(client_socket, "SUBMIT_REJECT");
+        pool_send_message(conn, "SUBMIT_REJECT");
         return 0;
     }
 
@@ -245,7 +248,7 @@ int coordinator_handle_submit(struct Runtime *runtime,
     if (is_task_queue_full(&runtime->task_manager->queue))
     {
         log_warn("queue_full", "Task queue full; rejecting task %d.", id);
-        send_message(client_socket, "SUBMIT_REJECT");
+        pool_send_message(conn, "SUBMIT_REJECT");
         return 0;
     }
 
@@ -255,7 +258,7 @@ int coordinator_handle_submit(struct Runtime *runtime,
     {
         log_error("wal_build_failed",
                   "Could not build WAL record for task %d.", id);
-        send_message(client_socket, "SUBMIT_REJECT");
+        pool_send_message(conn, "SUBMIT_REJECT");
         return 0;
     }
 
@@ -263,7 +266,7 @@ int coordinator_handle_submit(struct Runtime *runtime,
     {
         log_error("wal_append_failed",
                   "Could not append WAL record for task %d.", id);
-        send_message(client_socket, "SUBMIT_REJECT");
+        pool_send_message(conn, "SUBMIT_REJECT");
         return 0;
     }
 
@@ -272,7 +275,7 @@ int coordinator_handle_submit(struct Runtime *runtime,
         log_warn("task_rejected",
                  "runtime_submit_task rejected task %d.",
                  id);
-        send_message(client_socket, "SUBMIT_REJECT");
+        pool_send_message(conn, "SUBMIT_REJECT");
         return 0;
     }
 
@@ -290,21 +293,22 @@ int coordinator_handle_submit(struct Runtime *runtime,
 
     if (n <= 0 || (size_t)n >= sizeof(response))
     {
-        send_message(client_socket, "SUBMIT_REJECT");
+        pool_send_message(conn, "SUBMIT_REJECT");
         return 0;
     }
 
-    send_message(client_socket, response);
+    pool_send_message(conn, response);
 
     return 1;
 }
 
 int coordinator_handle_task_request(struct Runtime *runtime,
                                     struct InFlightTable *table,
-                                    int worker_socket,
+                                    struct Connection *conn,
                                     const char *message)
 {
-    if (runtime == NULL || table == NULL || message == NULL)
+    if (runtime == NULL || table == NULL || conn == NULL ||
+        message == NULL)
     {
         return 0;
     }
@@ -314,7 +318,7 @@ int coordinator_handle_task_request(struct Runtime *runtime,
 
     if (strncmp(message, prefix, prefix_length) != 0)
     {
-        send_message(worker_socket, "NO_TASK");
+        pool_send_message(conn, "NO_TASK");
         return 0;
     }
 
@@ -325,7 +329,7 @@ int coordinator_handle_task_request(struct Runtime *runtime,
     if (!wire_read_int(&cursor, &requesting_worker_id) ||
         requesting_worker_id <= 0)
     {
-        send_message(worker_socket, "NO_TASK");
+        pool_send_message(conn, "NO_TASK");
         return 0;
     }
 
@@ -338,7 +342,7 @@ int coordinator_handle_task_request(struct Runtime *runtime,
                                        &selected) ||
         selected == NULL)
     {
-        send_message(worker_socket, "NO_TASK");
+        pool_send_message(conn, "NO_TASK");
         return 1;
     }
 
@@ -350,7 +354,7 @@ int coordinator_handle_task_request(struct Runtime *runtime,
                  "In-flight table full; requeueing task %d.",
                  task.id);
         submit_task(runtime->task_manager, &task);
-        send_message(worker_socket, "NO_TASK");
+        pool_send_message(conn, "NO_TASK");
         return 0;
     }
 
@@ -363,14 +367,14 @@ int coordinator_handle_task_request(struct Runtime *runtime,
                   task.id);
         coordinator_take_inflight(table, task.id, NULL, NULL);
         submit_task(runtime->task_manager, &task);
-        send_message(worker_socket, "NO_TASK");
+        pool_send_message(conn, "NO_TASK");
         return 0;
     }
 
-    if (!send_message(worker_socket, assign))
+    if (!pool_send_message(conn, assign))
     {
         log_warn("assign_send_failed",
-                 "Failed to send TASK_ASSIGN for task %d.",
+                 "Failed to queue TASK_ASSIGN for task %d.",
                  task.id);
         return 0;
     }
@@ -385,12 +389,12 @@ int coordinator_handle_task_request(struct Runtime *runtime,
 
 int coordinator_handle_task_accept(struct Runtime *runtime,
                                    struct InFlightTable *table,
-                                   int worker_socket,
+                                   struct Connection *conn,
                                    const char *message)
 {
     (void)runtime;
 
-    if (table == NULL || message == NULL)
+    if (table == NULL || conn == NULL || message == NULL)
     {
         return 0;
     }
@@ -409,7 +413,7 @@ int coordinator_handle_task_accept(struct Runtime *runtime,
 
     if (!wire_read_int(&cursor, &task_id) || task_id <= 0)
     {
-        send_message(worker_socket, "TASK_ACCEPT_REJECT|-1|bad_id");
+        pool_send_message(conn, "TASK_ACCEPT_REJECT|-1|bad_id");
         return 0;
     }
 
@@ -424,7 +428,7 @@ int coordinator_handle_task_accept(struct Runtime *runtime,
                          task_id);
         if (n > 0 && (size_t)n < sizeof(reject))
         {
-            send_message(worker_socket, reject);
+            pool_send_message(conn, reject);
         }
         return 0;
     }
@@ -438,7 +442,7 @@ int coordinator_handle_task_accept(struct Runtime *runtime,
 
     if (n > 0 && (size_t)n < sizeof(ack))
     {
-        send_message(worker_socket, ack);
+        pool_send_message(conn, ack);
     }
 
     return 1;
@@ -446,10 +450,11 @@ int coordinator_handle_task_accept(struct Runtime *runtime,
 
 int coordinator_handle_task_result(struct Runtime *runtime,
                                    struct InFlightTable *table,
-                                   int worker_socket,
+                                   struct Connection *conn,
                                    const char *message)
 {
-    if (runtime == NULL || table == NULL || message == NULL)
+    if (runtime == NULL || table == NULL || conn == NULL ||
+        message == NULL)
     {
         return 0;
     }
@@ -471,7 +476,7 @@ int coordinator_handle_task_result(struct Runtime *runtime,
         log_warn("result_malformed",
                  "Malformed TASK_RESULT: %s",
                  message);
-        send_message(worker_socket, "UNKNOWN_COMMAND");
+        pool_send_message(conn, "UNKNOWN_COMMAND");
         return 0;
     }
 
@@ -488,7 +493,7 @@ int coordinator_handle_task_result(struct Runtime *runtime,
                  task_id,
                  worker_id);
 
-        send_message(worker_socket, "TASK_RESULT_ACK");
+        pool_send_message(conn, "TASK_RESULT_ACK");
         return 0;
     }
 
@@ -554,19 +559,19 @@ int coordinator_handle_task_result(struct Runtime *runtime,
         record_task_failed(&runtime->stats);
     }
 
-    send_message(worker_socket, "TASK_RESULT_ACK");
+    pool_send_message(conn, "TASK_RESULT_ACK");
 
     return 1;
 }
 
 int coordinator_handle_query(struct Runtime *runtime,
                              struct InFlightTable *table,
-                             int client_socket,
+                             struct Connection *conn,
                              const char *message)
 {
     (void)runtime;
 
-    if (table == NULL || message == NULL)
+    if (table == NULL || conn == NULL || message == NULL)
     {
         return 0;
     }
@@ -576,7 +581,7 @@ int coordinator_handle_query(struct Runtime *runtime,
 
     if (strncmp(message, prefix, prefix_length) != 0)
     {
-        send_message(client_socket, "QUERY_UNKNOWN|-1");
+        pool_send_message(conn, "QUERY_UNKNOWN|-1");
         return 0;
     }
 
@@ -586,7 +591,7 @@ int coordinator_handle_query(struct Runtime *runtime,
 
     if (!wire_read_int(&cursor, &task_id) || task_id <= 0)
     {
-        send_message(client_socket, "QUERY_UNKNOWN|-1");
+        pool_send_message(conn, "QUERY_UNKNOWN|-1");
         return 0;
     }
 
@@ -603,7 +608,7 @@ int coordinator_handle_query(struct Runtime *runtime,
         {
             return 0;
         }
-        send_message(client_socket, response);
+        pool_send_message(conn, response);
         return 1;
     }
 
@@ -628,7 +633,7 @@ int coordinator_handle_query(struct Runtime *runtime,
         {
             return 0;
         }
-        send_message(client_socket, response);
+        pool_send_message(conn, response);
         return 1;
     }
 
@@ -640,15 +645,15 @@ int coordinator_handle_query(struct Runtime *runtime,
     {
         return 0;
     }
-    send_message(client_socket, response);
+    pool_send_message(conn, response);
     return 1;
 }
 
 int coordinator_handle_status(struct Runtime *runtime,
                               struct InFlightTable *table,
-                              int client_socket)
+                              struct Connection *conn)
 {
-    if (runtime == NULL || table == NULL)
+    if (runtime == NULL || table == NULL || conn == NULL)
     {
         return 0;
     }
@@ -704,7 +709,7 @@ int coordinator_handle_status(struct Runtime *runtime,
         return 0;
     }
 
-    send_message(client_socket, response);
+    pool_send_message(conn, response);
 
     log_info("status_reported",
              "STATUS workers=%d active=%d queue=%d inflight=%d "

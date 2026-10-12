@@ -27,7 +27,7 @@
 static int handle_worker_message(
     struct Runtime *runtime,
     struct InFlightTable *table,
-    int worker_socket,
+    struct Connection *conn,
     const char *message)
 {
     log_debug(
@@ -44,7 +44,7 @@ static int handle_worker_message(
         {
             log_warn("registration_invalid",
                      "Invalid worker registration.");
-            send_message(worker_socket, "REGISTER_REJECT");
+            pool_send_message(conn, "REGISTER_REJECT");
             return 0;
         }
 
@@ -58,17 +58,17 @@ static int handle_worker_message(
         {
             log_warn("registration_failed",
                      "Failed to register worker.");
-            send_message(worker_socket, "REGISTER_REJECT");
+            pool_send_message(conn, "REGISTER_REJECT");
             return 0;
         }
 
         log_info("worker_registered",
                  "Worker registered with runtime. ✅");
 
-        if (!send_message(worker_socket, "REGISTER_ACK"))
+        if (!pool_send_message(conn, "REGISTER_ACK"))
         {
             log_warn("register_ack_failed",
-                     "Failed to send registration acknowledgement.");
+                     "Failed to queue registration acknowledgement.");
             return 0;
         }
 
@@ -84,7 +84,7 @@ static int handle_worker_message(
         {
             log_warn("heartbeat_invalid",
                      "Invalid heartbeat message.");
-            send_message(worker_socket, "HEARTBEAT_REJECT");
+            pool_send_message(conn, "HEARTBEAT_REJECT");
             return 0;
         }
 
@@ -97,14 +97,14 @@ static int handle_worker_message(
             log_warn("heartbeat_unknown_worker",
                      "Unknown worker: %d",
                      worker_id);
-            send_message(worker_socket, "HEARTBEAT_REJECT");
+            pool_send_message(conn, "HEARTBEAT_REJECT");
             return 0;
         }
 
-        if (!send_message(worker_socket, "HEARTBEAT_ACK"))
+        if (!pool_send_message(conn, "HEARTBEAT_ACK"))
         {
             log_warn("heartbeat_ack_failed",
-                     "Failed to send heartbeat acknowledgement.");
+                     "Failed to queue heartbeat acknowledgement.");
             return 0;
         }
 
@@ -115,41 +115,41 @@ static int handle_worker_message(
     if (strncmp(message, "SUBMIT|", 7) == 0)
     {
         return coordinator_handle_submit(
-            runtime, table, worker_socket, message);
+            runtime, table, conn, message);
     }
 
     if (strncmp(message, "TASK_REQUEST|", 13) == 0)
     {
         return coordinator_handle_task_request(
-            runtime, table, worker_socket, message);
+            runtime, table, conn, message);
     }
 
     if (strncmp(message, "TASK_ACCEPT|", 12) == 0)
     {
         return coordinator_handle_task_accept(
-            runtime, table, worker_socket, message);
+            runtime, table, conn, message);
     }
 
     if (strncmp(message, "TASK_RESULT|", 12) == 0)
     {
         return coordinator_handle_task_result(
-            runtime, table, worker_socket, message);
+            runtime, table, conn, message);
     }
 
     if (strncmp(message, "QUERY|", 6) == 0)
     {
         return coordinator_handle_query(
-            runtime, table, worker_socket, message);
+            runtime, table, conn, message);
     }
 
     if (strcmp(message, "STATUS") == 0)
     {
         return coordinator_handle_status(
-            runtime, table, worker_socket);
+            runtime, table, conn);
     }
 
     log_warn("message_unknown", "Unknown message: %s", message);
-    send_message(worker_socket, "UNKNOWN_COMMAND");
+    pool_send_message(conn, "UNKNOWN_COMMAND");
     return 0;
 }
 
@@ -224,18 +224,6 @@ int start_runtime_server(
         return 0;
     }
 
-    /*
-     * Bind loopback by default. IDR_BIND_ADDR overrides:
-     *
-     *   IDR_BIND_ADDR=0.0.0.0      accept from any interface
-     *   IDR_BIND_ADDR=192.168.x.y  accept on one interface
-     *
-     * Default 127.0.0.1 means the coordinator is only reachable
-     * from the local host unless explicitly opened. This is
-     * deliberate: the runtime executes operating-system commands
-     * on workers without authenticating the client, so the
-     * default posture is "not on the network."
-     */
     const char *bind_addr = getenv("IDR_BIND_ADDR");
     if (bind_addr == NULL || bind_addr[0] == '\0')
     {
@@ -349,7 +337,7 @@ int start_runtime_server(
         {
             short revents = pollfds[i].revents;
 
-            if (!(revents & (POLLIN | POLLHUP | POLLERR)))
+            if (!(revents & (POLLIN | POLLOUT | POLLHUP | POLLERR)))
             {
                 continue;
             }
@@ -367,22 +355,63 @@ int start_runtime_server(
 
             if (slot < 0) continue;
 
-            int step = pool_step(&pool.conns[slot]);
-
-            if (step < 0)
+            /*
+             * Read phase: parse one complete message, dispatch.
+             */
+            if (revents & (POLLIN | POLLHUP | POLLERR))
             {
-                pool_remove(&pool, slot);
-                continue;
+                int step = pool_step(&pool.conns[slot]);
+
+                if (step < 0)
+                {
+                    pool_remove(&pool, slot);
+                    continue;
+                }
+
+                if (step == 1)
+                {
+                    const char *payload =
+                        pool.conns[slot].buffer + 4;
+
+                    handle_worker_message(runtime,
+                                          &in_flight,
+                                          &pool.conns[slot],
+                                          payload);
+
+                    /*
+                     * Every request produces at most one
+                     * response. Mark the connection as
+                     * closing; if the response is fully
+                     * flushed already, close now. Otherwise
+                     * POLLOUT will finish it next tick.
+                     */
+                    pool.conns[slot].closing_after_flush = 1;
+                }
             }
 
-            if (step == 0) continue;
+            /*
+             * Write phase: drain any pending outbound bytes.
+             */
+            if (pool.conns[slot].send_offset <
+                pool.conns[slot].send_length)
+            {
+                if (!pool_flush(&pool.conns[slot]))
+                {
+                    pool_remove(&pool, slot);
+                    continue;
+                }
+            }
 
-            int fd = pool.conns[slot].fd;
-            const char *payload = pool.conns[slot].buffer + 4;
-
-            handle_worker_message(runtime, &in_flight, fd, payload);
-
-            pool_remove(&pool, slot);
+            /*
+             * Close once we've flushed the response and the
+             * connection is marked closing.
+             */
+            if (pool.conns[slot].closing_after_flush &&
+                pool.conns[slot].send_offset ==
+                pool.conns[slot].send_length)
+            {
+                pool_remove(&pool, slot);
+            }
         }
 
         int expired = pool_expire_idle(&pool);
