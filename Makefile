@@ -137,7 +137,7 @@ test:
 	@mkdir -p $(BUILD)
 	@echo "===== connection pool unit test ====="
 	$(CC) $(CFLAGS) tests/connection_pool_test.c \
-	    src/connection_pool.c src/network_protocol.c \
+	    src/connection_pool.c src/network_protocol.c src/log.c \
 	    -o $(BUILD)/connection_pool_test
 	$(BUILD)/connection_pool_test
 	@echo ""

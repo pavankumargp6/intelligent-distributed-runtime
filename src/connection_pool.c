@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 
 #include "connection_pool.h"
+#include "log.h"
 
 void pool_init(struct ConnectionPool *pool)
 {
@@ -35,11 +36,6 @@ int pool_add(struct ConnectionPool *pool, int fd)
         return -1;
     }
 
-    /*
-     * Make the fd non-blocking. accept4() with SOCK_NONBLOCK is
-     * another option, but doing it here keeps the pool as the
-     * single place that decides connection I/O semantics.
-     */
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
     {
@@ -55,6 +51,9 @@ int pool_add(struct ConnectionPool *pool, int fd)
             c->fd = fd;
             c->received = 0;
             c->expected = 0;
+            c->send_length = 0;
+            c->send_offset = 0;
+            c->closing_after_flush = 0;
             c->last_activity = time(NULL);
             pool->count++;
             return i;
@@ -83,6 +82,9 @@ void pool_remove(struct ConnectionPool *pool, int index)
 
     c->received = 0;
     c->expected = 0;
+    c->send_length = 0;
+    c->send_offset = 0;
+    c->closing_after_flush = 0;
 
     if (pool->count > 0)
     {
@@ -98,13 +100,18 @@ int pool_step(struct Connection *conn)
     }
 
     /*
-     * Try to read. Leave room for a trailing NUL.
+     * If we've already dispatched the request and are only
+     * waiting to flush the response, do not read more bytes.
      */
+    if (conn->closing_after_flush)
+    {
+        return 0;
+    }
+
     size_t space = sizeof(conn->buffer) - 1 - conn->received;
 
     if (space == 0)
     {
-        /* Buffer full without a complete message; protocol error. */
         return -1;
     }
 
@@ -115,7 +122,6 @@ int pool_step(struct Connection *conn)
 
     if (n == 0)
     {
-        /* Peer closed. */
         return -1;
     }
 
@@ -127,7 +133,7 @@ int pool_step(struct Connection *conn)
         }
         else if (errno == EINTR)
         {
-            /* Interrupted; not fatal. Try again later. */
+            /* Interrupted; not fatal. */
         }
         else
         {
@@ -165,6 +171,80 @@ int pool_step(struct Connection *conn)
     }
 
     conn->buffer[conn->expected] = '\0';
+    return 1;
+}
+
+int pool_send_message(struct Connection *conn, const char *message)
+{
+    if (conn == NULL || conn->fd < 0 || message == NULL)
+    {
+        return 0;
+    }
+
+    if (conn->send_offset < conn->send_length)
+    {
+        log_warn("pool_send_while_pending",
+                 "Connection already has %zu bytes pending",
+                 conn->send_length - conn->send_offset);
+        return 0;
+    }
+
+    size_t message_length = strlen(message);
+
+    if (message_length > NETWORK_MAX_MESSAGE_SIZE)
+    {
+        return 0;
+    }
+
+    uint32_t network_length = htonl((uint32_t)message_length);
+
+    memcpy(conn->send_buffer, &network_length, 4);
+    memcpy(conn->send_buffer + 4, message, message_length);
+
+    conn->send_length = 4 + message_length;
+    conn->send_offset = 0;
+
+    return pool_flush(conn);
+}
+
+int pool_flush(struct Connection *conn)
+{
+    if (conn == NULL || conn->fd < 0)
+    {
+        return 0;
+    }
+
+    while (conn->send_offset < conn->send_length)
+    {
+        ssize_t n = send(conn->fd,
+                         conn->send_buffer + conn->send_offset,
+                         conn->send_length - conn->send_offset,
+                         MSG_NOSIGNAL);
+
+        if (n > 0)
+        {
+            conn->send_offset += (size_t)n;
+            continue;
+        }
+
+        if (n == 0)
+        {
+            return 0;
+        }
+
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+        {
+            return 1;
+        }
+
+        if (errno == EINTR)
+        {
+            continue;
+        }
+
+        return 0;
+    }
+
     return 1;
 }
 
@@ -208,10 +288,6 @@ int pool_build_pollfds(struct ConnectionPool *pool,
         return 0;
     }
 
-    /*
-     * Slot 0 is reserved for the listener; the caller fills it in
-     * before calling us. We start filling at index 1.
-     */
     int n = 1;
 
     for (int i = 0;
@@ -223,8 +299,16 @@ int pool_build_pollfds(struct ConnectionPool *pool,
             continue;
         }
 
+        short events = POLLIN;
+
+        if (pool->conns[i].send_offset <
+            pool->conns[i].send_length)
+        {
+            events |= POLLOUT;
+        }
+
         pollfds[n].fd = pool->conns[i].fd;
-        pollfds[n].events = POLLIN;
+        pollfds[n].events = events;
         pollfds[n].revents = 0;
         n++;
     }
