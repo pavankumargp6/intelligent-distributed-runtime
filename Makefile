@@ -161,6 +161,15 @@ test:
 	@echo "===== auth_replay_test.sh ====="
 	bash tests/auth_replay_test.sh
 	@echo ""
+	@echo "===== auth_wrong_role_test.sh ====="
+	bash tests/auth_wrong_role_test.sh
+	@echo ""
+	@echo "===== auth_missing_secret_test.sh ====="
+	bash tests/auth_missing_secret_test.sh
+	@echo ""
+	@echo "===== auth_insecure_misuse_test.sh ====="
+	bash tests/auth_insecure_misuse_test.sh
+	@echo ""
 	@echo "===== wal_test.sh ====="
 	bash tests/wal_test.sh
 	@echo ""
