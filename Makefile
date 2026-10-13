@@ -147,6 +147,9 @@ test:
 	@echo "===== sha256_test.sh ====="
 	bash tests/sha256_test.sh
 	@echo ""
+	@echo "===== hmac_test.sh ====="
+	bash tests/hmac_test.sh
+	@echo ""
 	@echo "===== wal_test.sh ====="
 	bash tests/wal_test.sh
 	@echo ""
