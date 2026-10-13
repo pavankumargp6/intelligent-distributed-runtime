@@ -50,6 +50,14 @@ Every arrow is a length-prefixed TCP message on port 5001.
 ## Protocol
 
 Framing: `[4-byte network-order uint32 payload length][payload]`.
+
+This section is a summary. The canonical reference, including
+every message type, the authentication scheme, worked wire
+examples, and the task state machine, is in
+[docs/PROTOCOL.md](docs/PROTOCOL.md).
+
+Changes to a message format should be made to PROTOCOL.md
+first, then reflected here.
 Payloads are newline-free ASCII. Variable-length string fields
 (command, each argument) are length-prefixed as `<len>:<bytes>` so
 characters like `|`, spaces, and newlines inside them cannot
@@ -200,6 +208,10 @@ If a test fails and leaves a coordinator holding port 5001:
 
     pkill -9 -f 'idr_coord|idr_worker|runtime_server|worker_agent'
 
+## Repository layout
+
+    docs/
+      PROTOCOL.md               canonical wire protocol specification
 ## Repository layout
 
     src/
