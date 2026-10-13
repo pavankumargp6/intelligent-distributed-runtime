@@ -80,7 +80,18 @@ ASAN_CLIENT_SUB    = $(ASAN_BUILD)/client_submit
 ASAN_CLIENT_QRY    = $(ASAN_BUILD)/client_query
 ASAN_CLIENT_STATUS = $(ASAN_BUILD)/client_status
 
-.PHONY: all asan test clean help
+UBSAN_BUILD  = $(BUILD)/ubsan
+UBSAN_CFLAGS = $(CFLAGS) -g -O1 \
+               -fsanitize=undefined \
+               -fno-omit-frame-pointer
+
+UBSAN_COORDINATOR   = $(UBSAN_BUILD)/runtime_server
+UBSAN_WORKER        = $(UBSAN_BUILD)/worker_agent
+UBSAN_CLIENT_SUB    = $(UBSAN_BUILD)/client_submit
+UBSAN_CLIENT_QRY    = $(UBSAN_BUILD)/client_query
+UBSAN_CLIENT_STATUS = $(UBSAN_BUILD)/client_status
+
+.PHONY: all asan ubsan test clean help
 
 all: $(COORDINATOR_BIN) $(WORKER_BIN) \
      $(CLIENT_SUB_BIN) $(CLIENT_QRY_BIN) $(CLIENT_STATUS_BIN)
@@ -136,6 +147,32 @@ $(ASAN_CLIENT_QRY): $(CLIENT_QUERY_SRCS)
 $(ASAN_CLIENT_STATUS): $(CLIENT_STATUS_SRCS)
 	@mkdir -p $(ASAN_BUILD)
 	$(CC) $(ASAN_CFLAGS) $^ -o $@
+
+ubsan: $(UBSAN_COORDINATOR) $(UBSAN_WORKER) \
+       $(UBSAN_CLIENT_SUB) $(UBSAN_CLIENT_QRY) $(UBSAN_CLIENT_STATUS)
+	@echo ""
+	@echo "UBSan build complete: $(UBSAN_BUILD)/"
+	@echo "Run these binaries directly; UBSan errors print to stderr."
+
+$(UBSAN_COORDINATOR): $(COORDINATOR_SRCS)
+	@mkdir -p $(UBSAN_BUILD)
+	$(CC) $(UBSAN_CFLAGS) $^ -o $@
+
+$(UBSAN_WORKER): $(WORKER_SRCS)
+	@mkdir -p $(UBSAN_BUILD)
+	$(CC) $(UBSAN_CFLAGS) $^ -o $@
+
+$(UBSAN_CLIENT_SUB): $(CLIENT_SUBMIT_SRCS)
+	@mkdir -p $(UBSAN_BUILD)
+	$(CC) $(UBSAN_CFLAGS) $^ -o $@
+
+$(UBSAN_CLIENT_QRY): $(CLIENT_QUERY_SRCS)
+	@mkdir -p $(UBSAN_BUILD)
+	$(CC) $(UBSAN_CFLAGS) $^ -o $@
+
+$(UBSAN_CLIENT_STATUS): $(CLIENT_STATUS_SRCS)
+	@mkdir -p $(UBSAN_BUILD)
+	$(CC) $(UBSAN_CFLAGS) $^ -o $@
 
 test:
 	@mkdir -p $(BUILD)
@@ -215,6 +252,7 @@ help:
 	@echo "Targets:"
 	@echo "  make         build coordinator, worker, and three clients into $(BUILD)/"
 	@echo "  make asan    build with AddressSanitizer + UBSan into $(ASAN_BUILD)/"
+	@echo "  make ubsan   build with UndefinedBehaviorSanitizer into $(UBSAN_BUILD)/"
 	@echo "  make test    run unit and integration tests"
 	@echo "  make clean   remove $(BUILD)/"
 	@echo "  make help    this message"
