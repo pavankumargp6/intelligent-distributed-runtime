@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 
 #include "connection_pool.h"
+#include "auth.h"
 #include "log.h"
 
 void pool_init(struct ConnectionPool *pool)
@@ -55,6 +56,9 @@ int pool_add(struct ConnectionPool *pool, int fd)
             c->send_offset = 0;
             c->closing_after_flush = 0;
             c->last_activity = time(NULL);
+            c->peer_role = CONN_ROLE_UNSET;
+            c->response_secret = NULL;
+            c->response_direction = AUTH_DIR_WORKER_TO_COORD;
             pool->count++;
             return i;
         }
@@ -85,6 +89,9 @@ void pool_remove(struct ConnectionPool *pool, int index)
     c->send_length = 0;
     c->send_offset = 0;
     c->closing_after_flush = 0;
+    c->peer_role = CONN_ROLE_UNSET;
+    c->response_secret = NULL;
+    c->response_direction = AUTH_DIR_WORKER_TO_COORD;
 
     if (pool->count > 0)
     {
@@ -99,10 +106,6 @@ int pool_step(struct Connection *conn)
         return -1;
     }
 
-    /*
-     * If we've already dispatched the request and are only
-     * waiting to flush the response, do not read more bytes.
-     */
     if (conn->closing_after_flush)
     {
         return 0;
@@ -129,11 +132,9 @@ int pool_step(struct Connection *conn)
     {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
         {
-            /* No data right now. */
         }
         else if (errno == EINTR)
         {
-            /* Interrupted; not fatal. */
         }
         else
         {
@@ -189,7 +190,35 @@ int pool_send_message(struct Connection *conn, const char *message)
         return 0;
     }
 
-    size_t message_length = strlen(message);
+    /*
+     * Sign the message if we have a response secret on this
+     * connection. The signer role is always the coordinator
+     * for outbound responses.
+     */
+    char signed_buf[AUTH_MAX_SIGNED_SIZE];
+    const char *to_send = message;
+
+    if (conn->response_secret != NULL)
+    {
+        AuthResult r = auth_sign(conn->response_secret,
+                                 conn->response_direction,
+                                 AUTH_ROLE_COORDINATOR,
+                                 message,
+                                 signed_buf,
+                                 sizeof(signed_buf));
+
+        if (r != AUTH_OK)
+        {
+            log_warn("response_sign_failed",
+                     "auth_sign failed: %s",
+                     auth_result_name(r));
+            return 0;
+        }
+
+        to_send = signed_buf;
+    }
+
+    size_t message_length = strlen(to_send);
 
     if (message_length > NETWORK_MAX_MESSAGE_SIZE)
     {
@@ -199,7 +228,7 @@ int pool_send_message(struct Connection *conn, const char *message)
     uint32_t network_length = htonl((uint32_t)message_length);
 
     memcpy(conn->send_buffer, &network_length, 4);
-    memcpy(conn->send_buffer + 4, message, message_length);
+    memcpy(conn->send_buffer + 4, to_send, message_length);
 
     conn->send_length = 4 + message_length;
     conn->send_offset = 0;

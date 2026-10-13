@@ -4,8 +4,11 @@
  * Usage:
  *   ./client_submit [--idempotent] <command> [args...]
  *
- * Connects to the coordinator, sends SUBMIT|..., and prints
- * the response.
+ * Connects to the coordinator, sends SUBMIT|..., verifies the
+ * signed response, and prints it.
+ *
+ * In secure mode (default), the request is signed with
+ * IDR_CLIENT_SECRET. Set IDR_INSECURE=1 to disable.
  */
 
 #include <stdio.h>
@@ -19,6 +22,8 @@
 
 #include "network_protocol.h"
 #include "wire_fields.h"
+#include "auth.h"
+#include "auth_config.h"
 
 #define RUNTIME_ADDRESS "127.0.0.1"
 #define RUNTIME_SERVER_PORT 5001
@@ -42,39 +47,48 @@ int main(int argc, char *argv[])
         return 2;
     }
 
-    char message[NETWORK_MAX_MESSAGE_SIZE];
+    if (!auth_config_init())
+    {
+        fprintf(stderr,
+                "Authentication config invalid. Set "
+                "IDR_WORKER_SECRET and IDR_CLIENT_SECRET "
+                "(>= %d bytes each), or IDR_INSECURE=1.\n",
+                AUTH_CONFIG_MIN_SECRET_BYTES);
+        return 1;
+    }
 
-    memcpy(message, "SUBMIT", 6);
+    char plain[NETWORK_MAX_MESSAGE_SIZE];
+
+    memcpy(plain, "SUBMIT", 6);
     size_t offset = 6;
 
-    offset = wire_append_delimiter(message, sizeof(message), offset);
+    offset = wire_append_delimiter(plain, sizeof(plain), offset);
     if (offset == 0) { fprintf(stderr, "build failed at 1\n"); return 1; }
 
-    offset = wire_append_field(message, sizeof(message), offset, argv[first_arg]);
+    offset = wire_append_field(plain, sizeof(plain), offset, argv[first_arg]);
     if (offset == 0) { fprintf(stderr, "build failed at 2\n"); return 1; }
 
-    offset = wire_append_delimiter(message, sizeof(message), offset);
+    offset = wire_append_delimiter(plain, sizeof(plain), offset);
     if (offset == 0) { fprintf(stderr, "build failed at 3\n"); return 1; }
 
-    offset = wire_append_int(message, sizeof(message), offset, argc - first_arg - 1);
+    offset = wire_append_int(plain, sizeof(plain), offset, argc - first_arg - 1);
     if (offset == 0) { fprintf(stderr, "build failed at 4\n"); return 1; }
 
-    int i;
-    for (i = first_arg + 1; i < argc; i++)
+    for (int i = first_arg + 1; i < argc; i++)
     {
-        offset = wire_append_delimiter(message, sizeof(message), offset);
+        offset = wire_append_delimiter(plain, sizeof(plain), offset);
         if (offset == 0) { fprintf(stderr, "build failed at 5\n"); return 1; }
 
-        offset = wire_append_field(message, sizeof(message), offset, argv[i]);
+        offset = wire_append_field(plain, sizeof(plain), offset, argv[i]);
         if (offset == 0) { fprintf(stderr, "build failed at 6\n"); return 1; }
     }
 
     if (idempotent)
     {
-        offset = wire_append_delimiter(message, sizeof(message), offset);
+        offset = wire_append_delimiter(plain, sizeof(plain), offset);
         if (offset == 0) { fprintf(stderr, "build failed at 7\n"); return 1; }
 
-        offset = wire_append_int(message, sizeof(message), offset, 1);
+        offset = wire_append_int(plain, sizeof(plain), offset, 1);
         if (offset == 0) { fprintf(stderr, "build failed at 8\n"); return 1; }
     }
 
@@ -98,17 +112,38 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    printf("Submitting: %s\n", message);
+    char to_send[AUTH_MAX_SIGNED_SIZE];
+    const char *payload = plain;
+
+    if (auth_config_is_secure())
+    {
+        AuthResult r = auth_sign(auth_config_client_secret(),
+                                 AUTH_DIR_CLIENT_TO_COORD,
+                                 AUTH_ROLE_CLIENT,
+                                 plain,
+                                 to_send,
+                                 sizeof(to_send));
+        if (r != AUTH_OK)
+        {
+            fprintf(stderr, "auth_sign failed: %s\n",
+                    auth_result_name(r));
+            close(fd);
+            return 1;
+        }
+        payload = to_send;
+    }
+
+    printf("Submitting: %s\n", plain);
     fflush(stdout);
 
-    if (!send_message(fd, message))
+    if (!send_message(fd, payload))
     {
         fprintf(stderr, "send failed\n");
         close(fd);
         return 1;
     }
 
-    char response[128];
+    char response[AUTH_MAX_SIGNED_SIZE];
     if (!receive_message(fd, response, sizeof(response)))
     {
         fprintf(stderr, "receive failed\n");
@@ -118,11 +153,31 @@ int main(int argc, char *argv[])
 
     close(fd);
 
-    printf("Response: %s\n", response);
+    char verified[AUTH_MAX_SIGNED_SIZE];
+    const char *final_response = response;
 
-    if (strncmp(response, "SUBMIT_ACK|", 11) == 0)
+    if (auth_config_is_secure())
     {
-        printf("PASS: task accepted, id=%s\n", response + 11);
+        AuthResult r = auth_verify(auth_config_client_secret(),
+                                   AUTH_DIR_COORD_TO_CLIENT,
+                                   AUTH_ROLE_COORDINATOR,
+                                   response,
+                                   verified,
+                                   sizeof(verified));
+        if (r != AUTH_OK)
+        {
+            fprintf(stderr, "auth_verify failed: %s\n",
+                    auth_result_name(r));
+            return 1;
+        }
+        final_response = verified;
+    }
+
+    printf("Response: %s\n", final_response);
+
+    if (strncmp(final_response, "SUBMIT_ACK|", 11) == 0)
+    {
+        printf("PASS: task accepted, id=%s\n", final_response + 11);
         return 0;
     }
 

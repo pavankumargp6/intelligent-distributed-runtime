@@ -6,7 +6,11 @@ BUILD    ?= build
 
 COMMON_SRCS = \
     src/network_protocol.c \
-    src/wire_fields.c
+    src/wire_fields.c \
+    src/sha256.c \
+    src/hmac.c \
+    src/auth.c \
+    src/auth_config.c
 
 COORDINATOR_SRCS = \
     src/log.c \
@@ -52,11 +56,11 @@ CLIENT_SUBMIT_SRCS = \
     tests/client_submit.c
 
 CLIENT_QUERY_SRCS = \
-    src/network_protocol.c \
+    $(COMMON_SRCS) \
     tests/client_query.c
 
 CLIENT_STATUS_SRCS = \
-    src/network_protocol.c \
+    $(COMMON_SRCS) \
     tests/client_status.c
 
 COORDINATOR_BIN   = $(BUILD)/runtime_server
@@ -138,6 +142,7 @@ test:
 	@echo "===== connection pool unit test ====="
 	$(CC) $(CFLAGS) tests/connection_pool_test.c \
 	    src/connection_pool.c src/network_protocol.c src/log.c \
+	    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
 	    -o $(BUILD)/connection_pool_test
 	$(BUILD)/connection_pool_test
 	@echo ""

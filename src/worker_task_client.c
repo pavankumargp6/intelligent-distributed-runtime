@@ -9,6 +9,8 @@
 #include "worker_task_client.h"
 #include "network_protocol.h"
 #include "wire_fields.h"
+#include "auth.h"
+#include "auth_config.h"
 #include "log.h"
 
 #define RUNTIME_SERVER_PORT 5001
@@ -20,39 +22,91 @@ static int connect_to_runtime(const char *runtime_address)
         return -1;
     }
 
-    int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
 
-    if (socket_fd < 0)
+    if (fd < 0)
     {
         perror("socket");
         return -1;
     }
 
-    struct sockaddr_in server_address = {0};
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
 
-    server_address.sin_family = AF_INET;
-
-    if (inet_pton(AF_INET,
-                  runtime_address,
-                  &server_address.sin_addr) <= 0)
+    if (inet_pton(AF_INET, runtime_address, &addr.sin_addr) <= 0)
     {
         perror("inet_pton");
-        close(socket_fd);
+        close(fd);
         return -1;
     }
 
-    server_address.sin_port = htons(RUNTIME_SERVER_PORT);
+    addr.sin_port = htons(RUNTIME_SERVER_PORT);
 
-    if (connect(socket_fd,
-                (struct sockaddr *)&server_address,
-                sizeof(server_address)) < 0)
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
         perror("connect");
-        close(socket_fd);
+        close(fd);
         return -1;
     }
 
-    return socket_fd;
+    return fd;
+}
+
+static int sign_if_secure(const char *plain,
+                          char *signed_buf,
+                          size_t signed_buf_size,
+                          const char **out_message)
+{
+    if (!auth_config_is_secure())
+    {
+        *out_message = plain;
+        return 1;
+    }
+
+    AuthResult r = auth_sign(auth_config_worker_secret(),
+                             AUTH_DIR_WORKER_TO_COORD,
+                             AUTH_ROLE_WORKER,
+                             plain,
+                             signed_buf,
+                             signed_buf_size);
+
+    if (r != AUTH_OK)
+    {
+        log_warn("sign_failed", "auth_sign: %s", auth_result_name(r));
+        return 0;
+    }
+
+    *out_message = signed_buf;
+    return 1;
+}
+
+static int verify_if_secure(const char *signed_message,
+                            char *plain_buf,
+                            size_t plain_buf_size,
+                            const char **out_message)
+{
+    if (!auth_config_is_secure())
+    {
+        *out_message = signed_message;
+        return 1;
+    }
+
+    AuthResult r = auth_verify(auth_config_worker_secret(),
+                               AUTH_DIR_COORD_TO_WORKER,
+                               AUTH_ROLE_COORDINATOR,
+                               signed_message,
+                               plain_buf,
+                               plain_buf_size);
+
+    if (r != AUTH_OK)
+    {
+        log_warn("verify_failed", "auth_verify: %s",
+                 auth_result_name(r));
+        return 0;
+    }
+
+    *out_message = plain_buf;
+    return 1;
 }
 
 static int parse_task_assign(const char *message,
@@ -114,8 +168,7 @@ static int parse_task_assign(const char *message,
         return 0;
     }
 
-    int i;
-    for (i = 0; i < (int)argument_count; i++)
+    for (int i = 0; i < (int)argument_count; i++)
     {
         if (!wire_read_delimiter(&cursor))
         {
@@ -149,50 +202,65 @@ int request_task_from_runtime(
 
     *has_task = 0;
 
-    int socket_fd = connect_to_runtime(runtime_address);
+    int fd = connect_to_runtime(runtime_address);
 
-    if (socket_fd < 0)
+    if (fd < 0)
     {
         return 0;
     }
 
-    char request[64];
-    int request_length = snprintf(request,
-                                  sizeof(request),
-                                  "TASK_REQUEST|%d",
-                                  worker->id);
+    char plain[64];
+    int n = snprintf(plain, sizeof(plain),
+                     "TASK_REQUEST|%d", worker->id);
 
-    if (request_length <= 0 ||
-        (size_t)request_length >= sizeof(request))
+    if (n <= 0 || (size_t)n >= sizeof(plain))
     {
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    if (!send_message(socket_fd, request))
+    char signed_buf[AUTH_MAX_SIGNED_SIZE];
+    const char *to_send = NULL;
+
+    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
     {
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    char response[WORKER_TASK_MESSAGE_SIZE];
-
-    if (!receive_message(socket_fd,
-                         response,
-                         sizeof(response)))
+    if (!send_message(fd, to_send))
     {
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    close(socket_fd);
+    char response[AUTH_MAX_SIGNED_SIZE];
 
-    if (strcmp(response, "NO_TASK") == 0)
+    if (!receive_message(fd, response, sizeof(response)))
+    {
+        close(fd);
+        return 0;
+    }
+
+    close(fd);
+
+    char plain_response[AUTH_MAX_SIGNED_SIZE];
+    const char *verified = NULL;
+
+    if (!verify_if_secure(response,
+                          plain_response,
+                          sizeof(plain_response),
+                          &verified))
+    {
+        return 0;
+    }
+
+    if (strcmp(verified, "NO_TASK") == 0)
     {
         return 1;
     }
 
-    if (!parse_task_assign(response, task))
+    if (!parse_task_assign(verified, task))
     {
         return 0;
     }
@@ -212,49 +280,64 @@ int send_task_accept_to_runtime(
         return 0;
     }
 
-    int socket_fd = connect_to_runtime(runtime_address);
+    int fd = connect_to_runtime(runtime_address);
 
-    if (socket_fd < 0)
+    if (fd < 0)
     {
         return 0;
     }
 
-    char message[64];
-    int message_length = snprintf(message,
-                                  sizeof(message),
-                                  "TASK_ACCEPT|%d",
-                                  task_id);
+    char plain[64];
+    int n = snprintf(plain, sizeof(plain),
+                     "TASK_ACCEPT|%d", task_id);
 
-    if (message_length <= 0 ||
-        (size_t)message_length >= sizeof(message))
+    if (n <= 0 || (size_t)n >= sizeof(plain))
     {
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    if (!send_message(socket_fd, message))
+    char signed_buf[AUTH_MAX_SIGNED_SIZE];
+    const char *to_send = NULL;
+
+    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
     {
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    char response[128];
-
-    if (!receive_message(socket_fd,
-                         response,
-                         sizeof(response)))
+    if (!send_message(fd, to_send))
     {
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    close(socket_fd);
+    char response[AUTH_MAX_SIGNED_SIZE];
 
-    if (strncmp(response, "TASK_ACCEPT_ACK|", 16) != 0)
+    if (!receive_message(fd, response, sizeof(response)))
+    {
+        close(fd);
+        return 0;
+    }
+
+    close(fd);
+
+    char plain_response[AUTH_MAX_SIGNED_SIZE];
+    const char *verified = NULL;
+
+    if (!verify_if_secure(response,
+                          plain_response,
+                          sizeof(plain_response),
+                          &verified))
+    {
+        return 0;
+    }
+
+    if (strncmp(verified, "TASK_ACCEPT_ACK|", 16) != 0)
     {
         log_warn("task_accept_rejected",
                  "Coordinator replied %s for task %d",
-                 response, task_id);
+                 verified, task_id);
         return 0;
     }
 
@@ -272,49 +355,64 @@ int send_task_result_to_runtime(
         return 0;
     }
 
-    int socket_fd = connect_to_runtime(runtime_address);
+    int fd = connect_to_runtime(runtime_address);
 
-    if (socket_fd < 0)
+    if (fd < 0)
     {
         return 0;
     }
 
-    char message[256];
-    int message_length = snprintf(
-        message,
-        sizeof(message),
-        "TASK_RESULT|%d|%d|%d|%d",
-        task->id,
-        worker->id,
-        task->exit_status,
-        (int)task->state);
+    char plain[256];
+    int n = snprintf(plain, sizeof(plain),
+                     "TASK_RESULT|%d|%d|%d|%d",
+                     task->id,
+                     worker->id,
+                     task->exit_status,
+                     (int)task->state);
 
-    if (message_length <= 0 ||
-        (size_t)message_length >= sizeof(message))
+    if (n <= 0 || (size_t)n >= sizeof(plain))
     {
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    if (!send_message(socket_fd, message))
+    char signed_buf[AUTH_MAX_SIGNED_SIZE];
+    const char *to_send = NULL;
+
+    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
     {
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    char response[64];
-
-    if (!receive_message(socket_fd,
-                         response,
-                         sizeof(response)))
+    if (!send_message(fd, to_send))
     {
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    close(socket_fd);
+    char response[AUTH_MAX_SIGNED_SIZE];
 
-    if (strcmp(response, "TASK_RESULT_ACK") != 0)
+    if (!receive_message(fd, response, sizeof(response)))
+    {
+        close(fd);
+        return 0;
+    }
+
+    close(fd);
+
+    char plain_response[AUTH_MAX_SIGNED_SIZE];
+    const char *verified = NULL;
+
+    if (!verify_if_secure(response,
+                          plain_response,
+                          sizeof(plain_response),
+                          &verified))
+    {
+        return 0;
+    }
+
+    if (strcmp(verified, "TASK_RESULT_ACK") != 0)
     {
         return 0;
     }

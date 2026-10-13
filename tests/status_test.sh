@@ -8,6 +8,8 @@
 #   4. STATUS again -> submitted=1, queue=1 (task waiting, no worker).
 
 set -u
+export IDR_WORKER_SECRET="idr-test-worker-secret-do-not-use-in-production"
+export IDR_CLIENT_SECRET="idr-test-client-secret-do-not-use-in-production"
 export IDR_WAL_PATH=/tmp/idr_wal_status_test.log
 rm -f "$IDR_WAL_PATH"
 
@@ -43,6 +45,7 @@ gcc -Wall -Wextra \
     src/scheduler.c src/worker_pool.c src/worker.c src/worker_resources.c \
     src/process_info.c src/cpu_monitor.c src/task_executor.c src/task_metrics.c \
     src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
+    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
     src/log.c \
     src/wal.c \
@@ -53,11 +56,13 @@ gcc -Wall -Wextra \
 echo "===== Building submit client ====="
 gcc -Wall -Wextra -Isrc \
     tests/client_submit.c src/network_protocol.c src/wire_fields.c \
+    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$CLIENT_BIN" || exit 1
 
 echo "===== Building status client ====="
 gcc -Wall -Wextra -Isrc \
     tests/client_status.c src/network_protocol.c \
+    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$STATUS_BIN" || exit 1
 
 : > "$COORD_LOG"

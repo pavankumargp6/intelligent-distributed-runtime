@@ -17,6 +17,8 @@
 #   5. Wait for the coordinator to reap the idle connection.
 
 set -u
+export IDR_WORKER_SECRET="idr-test-worker-secret-do-not-use-in-production"
+export IDR_CLIENT_SECRET="idr-test-client-secret-do-not-use-in-production"
 export IDR_WAL_PATH=/tmp/idr_wal_hung_client_test.log
 rm -f "$IDR_WAL_PATH"
 COORD_PID=""
@@ -51,6 +53,7 @@ gcc -Wall -Wextra \
     src/scheduler.c src/worker_pool.c src/worker.c src/worker_resources.c \
     src/process_info.c src/cpu_monitor.c src/task_executor.c src/task_metrics.c \
     src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
+    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
     src/log.c \
     src/wal.c \
@@ -61,11 +64,13 @@ gcc -Wall -Wextra \
 echo "===== Building client_submit ====="
 gcc -Wall -Wextra -Isrc \
     tests/client_submit.c src/network_protocol.c src/wire_fields.c \
+    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$CLIENT_BIN" || exit 1
 
 echo "===== Building client_query ====="
 gcc -Wall -Wextra -Isrc \
     tests/client_query.c src/network_protocol.c \
+    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$QUERY_BIN" || exit 1
 
 echo "===== Building hung_client ====="

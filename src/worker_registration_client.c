@@ -9,148 +9,165 @@
 #include "worker.h"
 #include "worker_registration.h"
 #include "network_protocol.h"
+#include "auth.h"
+#include "auth_config.h"
+#include "log.h"
 
 #define RUNTIME_SERVER_PORT 5001
+
+static int connect_to_runtime(const char *runtime_address)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (fd < 0)
+    {
+        perror("socket");
+        return -1;
+    }
+
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+
+    if (inet_pton(AF_INET, runtime_address, &addr.sin_addr) <= 0)
+    {
+        perror("inet_pton");
+        close(fd);
+        return -1;
+    }
+
+    addr.sin_port = htons(RUNTIME_SERVER_PORT);
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    {
+        perror("connect");
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
+
+static int sign_if_secure(const char *plain,
+                          char *signed_buf,
+                          size_t signed_buf_size,
+                          const char **out_message)
+{
+    if (!auth_config_is_secure())
+    {
+        *out_message = plain;
+        return 1;
+    }
+
+    AuthResult r = auth_sign(auth_config_worker_secret(),
+                             AUTH_DIR_WORKER_TO_COORD,
+                             AUTH_ROLE_WORKER,
+                             plain,
+                             signed_buf,
+                             signed_buf_size);
+
+    if (r != AUTH_OK)
+    {
+        log_warn("sign_failed", "auth_sign: %s", auth_result_name(r));
+        return 0;
+    }
+
+    *out_message = signed_buf;
+    return 1;
+}
+
+static int verify_if_secure(const char *signed_message,
+                            char *plain_buf,
+                            size_t plain_buf_size,
+                            const char **out_message)
+{
+    if (!auth_config_is_secure())
+    {
+        *out_message = signed_message;
+        return 1;
+    }
+
+    AuthResult r = auth_verify(auth_config_worker_secret(),
+                               AUTH_DIR_COORD_TO_WORKER,
+                               AUTH_ROLE_COORDINATOR,
+                               signed_message,
+                               plain_buf,
+                               plain_buf_size);
+
+    if (r != AUTH_OK)
+    {
+        log_warn("verify_failed", "auth_verify: %s",
+                 auth_result_name(r));
+        return 0;
+    }
+
+    *out_message = plain_buf;
+    return 1;
+}
 
 int register_worker_with_runtime(
     struct Worker *worker,
     const char *runtime_address)
 {
-    if (worker == NULL ||
-        runtime_address == NULL)
+    if (worker == NULL || runtime_address == NULL)
     {
         return 0;
     }
 
-    /*
-     * Create TCP socket.
-     */
-    int socket_fd =
-        socket(AF_INET, SOCK_STREAM, 0);
+    int fd = connect_to_runtime(runtime_address);
 
-    if (socket_fd < 0)
+    if (fd < 0)
     {
-        perror("socket");
         return 0;
     }
 
-    /*
-     * Configure runtime server address.
-     */
-    struct sockaddr_in server_address = {0};
+    char plain[WORKER_REGISTRATION_MESSAGE_SIZE];
 
-    server_address.sin_family = AF_INET;
-
-    if (inet_pton(
-            AF_INET,
-            runtime_address,
-            &server_address.sin_addr) <= 0)
+    if (!build_worker_registration(worker, plain, sizeof(plain)))
     {
-        perror("inet_pton");
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    server_address.sin_port =
-        htons(RUNTIME_SERVER_PORT);
+    char signed_buf[AUTH_MAX_SIGNED_SIZE];
+    const char *to_send = NULL;
 
-    /*
-     * Connect to runtime coordinator.
-     */
-    if (connect(
-            socket_fd,
-            (struct sockaddr *)&server_address,
-            sizeof(server_address)) < 0)
+    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
     {
-        perror("connect");
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    printf("Connected to runtime.\n");
-
-    /*
-     * Build registration message.
-     */
-    char registration_message[
-        WORKER_REGISTRATION_MESSAGE_SIZE
-    ];
-
-    if (!build_worker_registration(
-            worker,
-            registration_message,
-            sizeof(registration_message)))
+    if (!send_message(fd, to_send))
     {
-        printf(
-            "Failed to build registration message.\n"
-        );
-
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    printf(
-        "Registration: %s\n",
-        registration_message
-    );
+    char response[AUTH_MAX_SIGNED_SIZE];
 
-    /*
-     * Send framed registration message.
-     */
-    if (!send_message(
-            socket_fd,
-            registration_message))
+    if (!receive_message(fd, response, sizeof(response)))
     {
-        printf(
-            "Failed to send registration.\n"
-        );
-
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    /*
-     * Wait for coordinator response.
-     */
-    char response[128];
+    close(fd);
 
-    if (!receive_message(
-            socket_fd,
-            response,
-            sizeof(response)))
+    char plain_response[AUTH_MAX_SIGNED_SIZE];
+    const char *verified = NULL;
+
+    if (!verify_if_secure(response,
+                          plain_response,
+                          sizeof(plain_response),
+                          &verified))
     {
-        printf(
-            "Failed to receive registration response.\n"
-        );
-
-        close(socket_fd);
         return 0;
     }
 
-    printf(
-        "Runtime response: %s\n",
-        response
-    );
-
-    close(socket_fd);
-
-    /*
-     * Verify registration acknowledgement.
-     */
-    if (strcmp(
-            response,
-            "REGISTER_ACK") == 0)
+    if (strcmp(verified, "REGISTER_ACK") == 0)
     {
-        printf(
-            "Worker registration successful. ✅\n"
-        );
-
         return 1;
     }
-
-    printf(
-        "Worker registration rejected. ❌\n"
-    );
 
     return 0;
 }
@@ -159,133 +176,66 @@ int send_worker_heartbeat(
     const struct Worker *worker,
     const char *runtime_address)
 {
-    if (worker == NULL ||
-        runtime_address == NULL)
+    if (worker == NULL || runtime_address == NULL)
     {
         return 0;
     }
 
-    /*
-     * Create TCP socket.
-     */
-    int socket_fd =
-        socket(AF_INET, SOCK_STREAM, 0);
+    int fd = connect_to_runtime(runtime_address);
 
-    if (socket_fd < 0)
+    if (fd < 0)
     {
-        perror("socket");
         return 0;
     }
 
-    /*
-     * Configure runtime address.
-     */
-    struct sockaddr_in server_address = {0};
+    char plain[128];
 
-    server_address.sin_family = AF_INET;
-
-    if (inet_pton(
-            AF_INET,
-            runtime_address,
-            &server_address.sin_addr) <= 0)
+    if (!build_worker_heartbeat(worker, plain, sizeof(plain)))
     {
-        perror("inet_pton");
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    server_address.sin_port =
-        htons(RUNTIME_SERVER_PORT);
+    char signed_buf[AUTH_MAX_SIGNED_SIZE];
+    const char *to_send = NULL;
 
-    /*
-     * Connect to runtime coordinator.
-     */
-    if (connect(
-            socket_fd,
-            (struct sockaddr *)&server_address,
-            sizeof(server_address)) < 0)
+    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
     {
-        perror("connect");
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    /*
-     * Build heartbeat message.
-     */
-    char heartbeat_message[128];
-
-    if (!build_worker_heartbeat(
-            worker,
-            heartbeat_message,
-            sizeof(heartbeat_message)))
+    if (!send_message(fd, to_send))
     {
-        printf(
-            "Failed to build heartbeat message.\n"
-        );
-
-        close(socket_fd);
+        close(fd);
         return 0;
     }
 
-    /*
-     * Send heartbeat.
-     */
-    if (!send_message(
-            socket_fd,
-            heartbeat_message))
-    {
-        printf(
-            "Failed to send heartbeat.\n"
-        );
+    char response[AUTH_MAX_SIGNED_SIZE];
 
-        close(socket_fd);
+    if (!receive_message(fd, response, sizeof(response)))
+    {
+        close(fd);
         return 0;
     }
 
-    printf(
-        "Sent: %s\n",
-        heartbeat_message
-    );
+    close(fd);
 
-    /*
-     * Receive acknowledgement.
-     */
-    char response[128];
+    char plain_response[AUTH_MAX_SIGNED_SIZE];
+    const char *verified = NULL;
 
-    if (!receive_message(
-            socket_fd,
-            response,
-            sizeof(response)))
+    if (!verify_if_secure(response,
+                          plain_response,
+                          sizeof(plain_response),
+                          &verified))
     {
-        printf(
-            "Failed to receive heartbeat response.\n"
-        );
-
-        close(socket_fd);
         return 0;
     }
 
-    close(socket_fd);
-
-    /*
-     * Verify heartbeat acknowledgement.
-     */
-    if (strcmp(
-            response,
-            "HEARTBEAT_ACK") == 0)
+    if (strcmp(verified, "HEARTBEAT_ACK") == 0)
     {
-        printf(
-            "Heartbeat acknowledged. ✅\n"
-        );
-
         return 1;
     }
-
-    printf(
-        "Heartbeat rejected: %s\n",
-        response
-    );
 
     return 0;
 }

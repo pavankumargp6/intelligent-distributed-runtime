@@ -12,6 +12,8 @@
 #   8. Submit a 4th task, verify it gets id=4.
 
 set -u
+export IDR_WORKER_SECRET="idr-test-worker-secret-do-not-use-in-production"
+export IDR_CLIENT_SECRET="idr-test-client-secret-do-not-use-in-production"
 
 if ss -ltn 2>/dev/null | grep -q ":5001 "; then
     echo "FAIL: port 5001 already in use. Kill leftovers first:"
@@ -47,6 +49,7 @@ gcc -Wall -Wextra \
     src/scheduler.c src/worker_pool.c src/worker.c src/worker_resources.c \
     src/process_info.c src/cpu_monitor.c src/task_executor.c src/task_metrics.c \
     src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
+    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
     src/log.c src/wal.c src/recovery.c \
     src/connection_pool.c \
@@ -55,11 +58,13 @@ gcc -Wall -Wextra \
 echo "===== Building submit client ====="
 gcc -Wall -Wextra -Isrc \
     tests/client_submit.c src/network_protocol.c src/wire_fields.c \
+    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$CLIENT_BIN" || exit 1
 
 echo "===== Building status client ====="
 gcc -Wall -Wextra -Isrc \
     tests/client_status.c src/network_protocol.c \
+    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$STATUS_BIN" || exit 1
 
 rm -f "$WAL_PATH"

@@ -79,6 +79,45 @@ Example: submitting `echo hello world` produces the wire message
 
     SUBMIT|4:echo|2|5:hello|5:world
 
+## Authentication
+
+Every message on the wire is signed with HMAC-SHA256 by
+default. The signed form is:
+
+    <original_message>|<timestamp>|<hex_hmac>
+
+where `<hex_hmac>` is HMAC-SHA256 of
+
+    IDR-AUTH-V1|<direction>|<role>|<timestamp>|<original_message>
+
+computed with a role-specific secret. `<direction>` and
+`<role>` bind the MAC to the message type and to the signer,
+so a MAC computed for one context cannot be replayed in
+another.
+
+Two modes are supported:
+
+- **Secure mode (default).** Both `IDR_WORKER_SECRET` and
+  `IDR_CLIENT_SECRET` must be set (32 bytes minimum each).
+  Every incoming message is verified and every outgoing
+  response is signed. The coordinator refuses to start
+  without them.
+
+- **Insecure development mode.** Enabled by
+  `IDR_INSECURE=1`. Authentication is disabled entirely.
+  The coordinator additionally requires a loopback bind
+  address in this mode and refuses to start on `0.0.0.0`.
+
+Signed messages carry a Unix timestamp. The receiver
+rejects messages older than 60 seconds or more than 5
+seconds in the future. This narrows the replay window; a
+recent-MAC cache that fully closes it is on the roadmap.
+
+HMAC authenticates but does not encrypt. The wire is still
+plaintext. TLS is out of scope; do not expose the
+coordinator to an untrusted network merely because
+authentication was added.
+
 ## Building
 
 Everything builds with `gcc -Wall -Wextra`. No external
@@ -135,6 +174,9 @@ down processes, and exit non-zero on failure.
 | Test                        | What it proves                                                     |
 |-----------------------------|--------------------------------------------------------------------|
 | `connection_pool_test.c`    | Incremental framing: partial reads, complete messages, oversize length, peer close, idle expiry. |
+| `sha256_test.c`             | SHA-256 against NIST FIPS 180-4 vectors.                |
+| `hmac_test.c`               | HMAC-SHA256 against RFC 4231 vectors.                   |
+| `auth_test.c`               | Sign/verify round-trip and every failure mode.         |
 | `worker_remote_exec_test.sh`| Worker-side protocol against a fake coordinator.                   |
 | `remote_exec_e2e_test.sh`   | Full lifecycle: submit → dispatch → execute → report → query.       |
 | `fault_injection_test.sh`   | A worker killed mid-task is detected and its task recorded as `TASK_FAILED`. |
@@ -235,13 +277,11 @@ language.
   segfaults, the coordinator will not notice. Detecting this
   requires per-task timeouts or a worker-side signal, neither of
   which exists.
-- **No authentication.** Any client that can reach the coordinator
-  port can submit any command. The runtime is designed for trusted
-  networks.
-- **Workers poll; they do not push.** A worker asks for work every
-  ~3 seconds. Dispatch latency is therefore at least the poll
-  interval. Push delivery would require persistent worker
-  connections on the coordinator.
+- **No transport encryption.** Authentication is enforced on
+  every message (see the Authentication section), but the
+  wire is still plaintext. TLS is out of scope. Do not
+  expose the coordinator to an untrusted network merely
+  because authentication is present.
 
 ## Roadmap
 

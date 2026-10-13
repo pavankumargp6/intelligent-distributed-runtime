@@ -18,11 +18,71 @@
 #include "connection_pool.h"
 #include "recovery.h"
 #include "wal.h"
+#include "auth.h"
+#include "auth_config.h"
 #include "log.h"
 
 #define MAX_POLLFDS (CONNECTION_POOL_CAPACITY + 1)
 #define DEFAULT_WAL_PATH "./idr-wal.log"
 #define DEFAULT_BIND_ADDR "127.0.0.1"
+
+static int is_loopback_address(const char *addr)
+{
+    if (addr == NULL)
+    {
+        return 0;
+    }
+
+    return strcmp(addr, "127.0.0.1") == 0 ||
+           strcmp(addr, "::1") == 0 ||
+           strcmp(addr, "localhost") == 0;
+}
+
+/*
+ * Classify an unsigned message by type. Sets expected_dir,
+ * expected_role and is_worker_message on success. Returns 1 on
+ * a recognized message, 0 on unknown.
+ *
+ * A message that does not begin with a known keyword is
+ * rejected. This is where the coordinator decides which role
+ * the sender claims to be, and thus which secret is required
+ * to authenticate them.
+ */
+static int classify_message(const char *message,
+                            AuthDirection *expected_dir,
+                            AuthRole *expected_role,
+                            int *is_worker_message)
+{
+    if (message == NULL)
+    {
+        return 0;
+    }
+
+    if (strncmp(message, "REGISTER|", 9) == 0 ||
+        strncmp(message, "HEARTBEAT|", 10) == 0 ||
+        strncmp(message, "TASK_REQUEST|", 13) == 0 ||
+        strncmp(message, "TASK_ACCEPT|", 12) == 0 ||
+        strncmp(message, "TASK_RESULT|", 12) == 0)
+    {
+        *expected_dir = AUTH_DIR_WORKER_TO_COORD;
+        *expected_role = AUTH_ROLE_WORKER;
+        *is_worker_message = 1;
+        return 1;
+    }
+
+    if (strncmp(message, "SUBMIT|", 7) == 0 ||
+        strncmp(message, "QUERY|", 6) == 0 ||
+        (strncmp(message, "STATUS", 6) == 0 &&
+         (message[6] == '\0' || message[6] == '|')))   
+ {
+        *expected_dir = AUTH_DIR_CLIENT_TO_COORD;
+        *expected_role = AUTH_ROLE_CLIENT;
+        *is_worker_message = 0;
+        return 1;
+    }
+
+    return 0;
+}
 
 static int handle_worker_message(
     struct Runtime *runtime,
@@ -30,17 +90,83 @@ static int handle_worker_message(
     struct Connection *conn,
     const char *message)
 {
-    log_debug(
-        "message_received",
-        "Received: %s",
-        message
-    );
+    AuthDirection expected_dir = AUTH_DIR_WORKER_TO_COORD;
+    AuthRole expected_role = AUTH_ROLE_WORKER;
+    int is_worker_message = 0;
 
-    if (strncmp(message, "REGISTER|", 9) == 0)
+    if (!classify_message(message,
+                          &expected_dir,
+                          &expected_role,
+                          &is_worker_message))
+    {
+        log_warn("message_unknown",
+                 "Unknown or unrecognized message: %.64s",
+                 message);
+        return 0;
+    }
+
+    /*
+     * Verify the MAC in secure mode. In insecure mode we trust
+     * the message as-is and use it directly for dispatch.
+     */
+    char unsigned_buf[AUTH_MAX_SIGNED_SIZE];
+    const char *dispatch_msg = message;
+
+    if (auth_config_is_secure())
+    {
+        const char *secret = is_worker_message
+            ? auth_config_worker_secret()
+            : auth_config_client_secret();
+
+        AuthResult r = auth_verify(secret,
+                                   expected_dir,
+                                   expected_role,
+                                   message,
+                                   unsigned_buf,
+                                   sizeof(unsigned_buf));
+
+        if (r != AUTH_OK)
+        {
+            log_warn("auth_failed",
+                     "Verification failed (%s) for message type %.32s",
+                     auth_result_name(r),
+                     message);
+            return 0;
+        }
+
+        dispatch_msg = unsigned_buf;
+    }
+
+    /*
+     * Record the authenticated role on the connection, and the
+     * secret and direction to use when signing the response.
+     */
+    if (is_worker_message)
+    {
+        conn->peer_role = CONN_ROLE_WORKER;
+        conn->response_direction = AUTH_DIR_COORD_TO_WORKER;
+        conn->response_secret = auth_config_is_secure()
+            ? auth_config_worker_secret()
+            : NULL;
+    }
+    else
+    {
+        conn->peer_role = CONN_ROLE_CLIENT;
+        conn->response_direction = AUTH_DIR_COORD_TO_CLIENT;
+        conn->response_secret = auth_config_is_secure()
+            ? auth_config_client_secret()
+            : NULL;
+    }
+
+    log_debug("message_received",
+              "Received: %s",
+              dispatch_msg);
+
+    if (strncmp(dispatch_msg, "REGISTER|", 9) == 0)
     {
         struct Worker worker = {0};
 
-        if (!parse_worker_registration(message, &worker))
+        if (!parse_worker_registration(dispatch_msg, &worker))
         {
             log_warn("registration_invalid",
                      "Invalid worker registration.");
@@ -76,11 +202,11 @@ static int handle_worker_message(
         return 1;
     }
 
-    if (strncmp(message, "HEARTBEAT|", 10) == 0)
+    if (strncmp(dispatch_msg, "HEARTBEAT|", 10) == 0)
     {
         int worker_id;
 
-        if (!parse_worker_heartbeat(message, &worker_id))
+        if (!parse_worker_heartbeat(dispatch_msg, &worker_id))
         {
             log_warn("heartbeat_invalid",
                      "Invalid heartbeat message.");
@@ -112,44 +238,45 @@ static int handle_worker_message(
         return 1;
     }
 
-    if (strncmp(message, "SUBMIT|", 7) == 0)
+    if (strncmp(dispatch_msg, "SUBMIT|", 7) == 0)
     {
         return coordinator_handle_submit(
-            runtime, table, conn, message);
+            runtime, table, conn, dispatch_msg);
     }
 
-    if (strncmp(message, "TASK_REQUEST|", 13) == 0)
+    if (strncmp(dispatch_msg, "TASK_REQUEST|", 13) == 0)
     {
         return coordinator_handle_task_request(
-            runtime, table, conn, message);
+            runtime, table, conn, dispatch_msg);
     }
 
-    if (strncmp(message, "TASK_ACCEPT|", 12) == 0)
+    if (strncmp(dispatch_msg, "TASK_ACCEPT|", 12) == 0)
     {
         return coordinator_handle_task_accept(
-            runtime, table, conn, message);
+            runtime, table, conn, dispatch_msg);
     }
 
-    if (strncmp(message, "TASK_RESULT|", 12) == 0)
+    if (strncmp(dispatch_msg, "TASK_RESULT|", 12) == 0)
     {
         return coordinator_handle_task_result(
-            runtime, table, conn, message);
+            runtime, table, conn, dispatch_msg);
     }
 
-    if (strncmp(message, "QUERY|", 6) == 0)
+    if (strncmp(dispatch_msg, "QUERY|", 6) == 0)
     {
         return coordinator_handle_query(
-            runtime, table, conn, message);
+            runtime, table, conn, dispatch_msg);
     }
 
-    if (strcmp(message, "STATUS") == 0)
+    if (strcmp(dispatch_msg, "STATUS") == 0)
     {
         return coordinator_handle_status(
             runtime, table, conn);
     }
 
-    log_warn("message_unknown", "Unknown message: %s", message);
-    pool_send_message(conn, "UNKNOWN_COMMAND");
+    log_warn("message_unknown",
+             "Unknown message after auth: %.64s",
+             dispatch_msg);
     return 0;
 }
 
@@ -159,6 +286,22 @@ int start_runtime_server(
 {
     if (runtime == NULL)
     {
+        return 0;
+    }
+
+    /*
+     * Read the authentication configuration before doing
+     * anything else. Refuse to start if the configuration is
+     * invalid.
+     */
+    if (!auth_config_init())
+    {
+        log_error("auth_config_invalid",
+                  "Authentication configuration is invalid. "
+                  "Set IDR_WORKER_SECRET and IDR_CLIENT_SECRET to "
+                  "at least %d bytes each, or set IDR_INSECURE=1 "
+                  "for loopback-only development.",
+                  AUTH_CONFIG_MIN_SECRET_BYTES);
         return 0;
     }
 
@@ -173,17 +316,6 @@ int start_runtime_server(
 
     runtime->wal.fd = -1;
 
-    /*
-     * Compact the WAL before opening it for append.
-     *
-     * Compaction rewrites the file with only live records:
-     * RESULTs for completed tasks, SUBMITs for tasks still
-     * pending. It writes to a temporary file and renames, so
-     * the original WAL is untouched if compaction fails.
-     *
-     * Best-effort: log a warning on failure and continue. The
-     * un-compacted WAL is still valid; replay will read it.
-     */
     if (!recovery_compact_wal(wal_path))
     {
         log_warn("wal_compact_skipped",
@@ -206,6 +338,40 @@ int start_runtime_server(
                   "Could not replay WAL; refusing to start.");
         wal_close(&runtime->wal);
         return 0;
+    }
+
+    const char *bind_addr = getenv("IDR_BIND_ADDR");
+    if (bind_addr == NULL || bind_addr[0] == '\0')
+    {
+        bind_addr = DEFAULT_BIND_ADDR;
+    }
+
+    /*
+     * In insecure mode, require the bind address to be
+     * loopback. This is a hard guarantee: insecure mode can
+     * only ever accept local traffic.
+     */
+    if (!auth_config_is_secure())
+    {
+        if (!is_loopback_address(bind_addr))
+        {
+            log_error("auth_insecure_bind_refused",
+                      "IDR_INSECURE=1 requires a loopback bind "
+                      "address; got %s. Refusing to start.",
+                      bind_addr);
+            wal_close(&runtime->wal);
+            return 0;
+        }
+
+        log_warn("auth_mode_insecure",
+                 "Running without authentication. "
+                 "Loopback-only. Do not use in production.");
+    }
+    else
+    {
+        log_info("auth_mode_secure",
+                 "Authentication enabled. "
+                 "Every message will be verified.");
     }
 
     static struct ConnectionPool pool;
@@ -240,12 +406,6 @@ int start_runtime_server(
         close(server_socket);
         wal_close(&runtime->wal);
         return 0;
-    }
-
-    const char *bind_addr = getenv("IDR_BIND_ADDR");
-    if (bind_addr == NULL || bind_addr[0] == '\0')
-    {
-        bind_addr = DEFAULT_BIND_ADDR;
     }
 
     struct sockaddr_in server_address = {0};
@@ -288,6 +448,8 @@ int start_runtime_server(
     printf("========================================\n");
     printf("Bind   : %s\n", bind_addr);
     printf("Port   : %d\n", port);
+    printf("Auth   : %s\n",
+           auth_config_is_secure() ? "secure" : "insecure (loopback only)");
     printf("Status : LISTENING\n");
     printf("========================================\n");
 
