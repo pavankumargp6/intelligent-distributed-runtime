@@ -91,7 +91,16 @@ UBSAN_CLIENT_SUB    = $(UBSAN_BUILD)/client_submit
 UBSAN_CLIENT_QRY    = $(UBSAN_BUILD)/client_query
 UBSAN_CLIENT_STATUS = $(UBSAN_BUILD)/client_status
 
-.PHONY: all asan ubsan test clean help
+ANALYZER_BUILD  = $(BUILD)/analyzer
+ANALYZER_CFLAGS = $(CFLAGS) -g -O0 -fanalyzer
+
+ANALYZER_COORDINATOR   = $(ANALYZER_BUILD)/runtime_server
+ANALYZER_WORKER        = $(ANALYZER_BUILD)/worker_agent
+ANALYZER_CLIENT_SUB    = $(ANALYZER_BUILD)/client_submit
+ANALYZER_CLIENT_QRY    = $(ANALYZER_BUILD)/client_query
+ANALYZER_CLIENT_STATUS = $(ANALYZER_BUILD)/client_status
+
+.PHONY: all asan ubsan analyzer test clean help
 
 all: $(COORDINATOR_BIN) $(WORKER_BIN) \
      $(CLIENT_SUB_BIN) $(CLIENT_QRY_BIN) $(CLIENT_STATUS_BIN)
@@ -174,6 +183,33 @@ $(UBSAN_CLIENT_STATUS): $(CLIENT_STATUS_SRCS)
 	@mkdir -p $(UBSAN_BUILD)
 	$(CC) $(UBSAN_CFLAGS) $^ -o $@
 
+analyzer: $(ANALYZER_COORDINATOR) $(ANALYZER_WORKER) \
+          $(ANALYZER_CLIENT_SUB) $(ANALYZER_CLIENT_QRY) $(ANALYZER_CLIENT_STATUS)
+	@echo ""
+	@echo "Static analysis complete: $(ANALYZER_BUILD)/"
+	@echo "If no diagnostics appeared above, the analysis found nothing."
+	@echo "The binaries here are not intended to be run; see make asan or make ubsan."
+
+$(ANALYZER_COORDINATOR): $(COORDINATOR_SRCS)
+	@mkdir -p $(ANALYZER_BUILD)
+	$(CC) $(ANALYZER_CFLAGS) $^ -o $@
+
+$(ANALYZER_WORKER): $(WORKER_SRCS)
+	@mkdir -p $(ANALYZER_BUILD)
+	$(CC) $(ANALYZER_CFLAGS) $^ -o $@
+
+$(ANALYZER_CLIENT_SUB): $(CLIENT_SUBMIT_SRCS)
+	@mkdir -p $(ANALYZER_BUILD)
+	$(CC) $(ANALYZER_CFLAGS) $^ -o $@
+
+$(ANALYZER_CLIENT_QRY): $(CLIENT_QUERY_SRCS)
+	@mkdir -p $(ANALYZER_BUILD)
+	$(CC) $(ANALYZER_CFLAGS) $^ -o $@
+
+$(ANALYZER_CLIENT_STATUS): $(CLIENT_STATUS_SRCS)
+	@mkdir -p $(ANALYZER_BUILD)
+	$(CC) $(ANALYZER_CFLAGS) $^ -o $@
+
 test:
 	@mkdir -p $(BUILD)
 	@echo "===== connection pool unit test ====="
@@ -253,6 +289,7 @@ help:
 	@echo "  make         build coordinator, worker, and three clients into $(BUILD)/"
 	@echo "  make asan    build with AddressSanitizer + UBSan into $(ASAN_BUILD)/"
 	@echo "  make ubsan   build with UndefinedBehaviorSanitizer into $(UBSAN_BUILD)/"
+	@echo "  make analyzer  build with GCC -fanalyzer into $(ANALYZER_BUILD)/"
 	@echo "  make test    run unit and integration tests"
 	@echo "  make clean   remove $(BUILD)/"
 	@echo "  make help    this message"
