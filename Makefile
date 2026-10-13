@@ -144,6 +144,9 @@ test:
 	@echo "===== log_test.sh ====="
 	bash tests/log_test.sh
 	@echo ""
+	@echo "===== sha256_test.sh ====="
+	bash tests/sha256_test.sh
+	@echo ""
 	@echo "===== wal_test.sh ====="
 	bash tests/wal_test.sh
 	@echo ""
