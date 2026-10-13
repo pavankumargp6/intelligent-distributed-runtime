@@ -8,21 +8,100 @@
 #include "auth.h"
 #include "hmac.h"
 
-/*
- * Replay window. A signed message whose timestamp is more
- * than AUTH_MAX_AGE_SECONDS in the past or more than
- * AUTH_MAX_FUTURE_SECONDS in the future is rejected.
- *
- * "Future" margin covers modest clock skew between hosts.
- * These values are load-bearing for the eventual replay
- * cache; the cache can only bound its window usefully if
- * the timestamp window is bounded here.
- */
 #define AUTH_MAX_AGE_SECONDS    60
 #define AUTH_MAX_FUTURE_SECONDS 5
 
 #define AUTH_MAGIC      "IDR-AUTH-V1"
 #define AUTH_HEX_LEN    64
+
+/*
+ * Recent-MAC cache. Populated only after a message passes MAC
+ * verification, so unauthenticated input cannot poison it.
+ *
+ * Zero-initialized statics are equivalent to an empty cache:
+ * in_use == 0 means the slot is free.
+ */
+struct ReplayEntry
+{
+    unsigned char mac[SHA256_DIGEST_SIZE];
+    time_t inserted_at;
+    int in_use;
+};
+
+static struct ReplayEntry g_replay_cache[AUTH_REPLAY_CACHE_SIZE];
+
+void auth_replay_cache_reset(void)
+{
+    memset(g_replay_cache, 0, sizeof(g_replay_cache));
+}
+
+/*
+ * Look for mac in the cache. Returns 1 on hit, 0 on miss.
+ * Constant-time within each entry, but the scan itself is not;
+ * cache content is not secret, so this is fine.
+ */
+static int replay_cache_lookup(const unsigned char mac[SHA256_DIGEST_SIZE])
+{
+    for (int i = 0; i < AUTH_REPLAY_CACHE_SIZE; i++)
+    {
+        if (!g_replay_cache[i].in_use)
+        {
+            continue;
+        }
+
+        unsigned char diff = 0;
+
+        for (int j = 0; j < SHA256_DIGEST_SIZE; j++)
+        {
+            diff |= (unsigned char)(g_replay_cache[i].mac[j] ^ mac[j]);
+        }
+
+        if (diff == 0)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * Pick a slot for a new entry. Preference order:
+ *   1. Any unused slot.
+ *   2. A slot whose entry is older than the timestamp window.
+ * If neither exists, return -1.
+ */
+static int replay_cache_find_slot(time_t now)
+{
+    for (int i = 0; i < AUTH_REPLAY_CACHE_SIZE; i++)
+    {
+        if (!g_replay_cache[i].in_use)
+        {
+            return i;
+        }
+    }
+
+    for (int i = 0; i < AUTH_REPLAY_CACHE_SIZE; i++)
+    {
+        double age = difftime(now, g_replay_cache[i].inserted_at);
+
+        if (age > (double)AUTH_MAX_AGE_SECONDS)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+static void replay_cache_insert(int slot,
+                                const unsigned char mac[SHA256_DIGEST_SIZE],
+                                time_t now)
+{
+    memcpy(g_replay_cache[slot].mac, mac, SHA256_DIGEST_SIZE);
+    g_replay_cache[slot].inserted_at = now;
+    g_replay_cache[slot].in_use = 1;
+}
 
 static const char *direction_name(AuthDirection direction)
 {
@@ -83,11 +162,6 @@ AuthResult auth_sign_at(const char *secret,
         return AUTH_ERR_INVALID_INPUT;
     }
 
-    /*
-     * Serialize the timestamp as unsigned decimal. Negative
-     * timestamps are rejected above; cast to unsigned long
-     * long for portable formatting.
-     */
     char ts_str[32];
     int n = snprintf(ts_str, sizeof(ts_str),
                      "%llu",
@@ -98,13 +172,6 @@ AuthResult auth_sign_at(const char *secret,
         return AUTH_ERR_INVALID_INPUT;
     }
 
-    /*
-     * Build the canonical MAC input.
-     *
-     * The buffer is sized for the largest possible input:
-     * magic + direction + role + timestamp + message, plus
-     * separators and NUL.
-     */
     char mac_input[AUTH_MAX_SIGNED_SIZE + 128];
     int m = snprintf(mac_input, sizeof(mac_input),
                      "%s|%s|%s|%s|%s",
@@ -131,10 +198,6 @@ AuthResult auth_sign_at(const char *secret,
     char hex[AUTH_HEX_LEN + 1];
     hmac_sha256_hex(mac, hex);
 
-    /*
-     * Assemble the wire form:
-     *   <message>|<ts>|<hex>
-     */
     int w = snprintf(out, out_size,
                      "%s|%s|%s",
                      message,
@@ -204,18 +267,9 @@ AuthResult auth_verify_at(const char *secret,
         return AUTH_ERR_MALFORMED;
     }
 
-    /*
-     * Work on a mutable copy. We split the string by
-     * overwriting separators with NUL.
-     */
     char scratch[AUTH_MAX_SIGNED_SIZE + 1];
     memcpy(scratch, signed_message, len + 1);
 
-    /*
-     * From the right:
-     *   last '|'      separates <hex> from <ts>
-     *   next '|'      separates <ts> from <message>
-     */
     char *last = strrchr(scratch, '|');
 
     if (last == NULL)
@@ -255,11 +309,6 @@ AuthResult auth_verify_at(const char *secret,
         return AUTH_ERR_MALFORMED;
     }
 
-    /*
-     * Parse and validate the timestamp. Non-digit characters,
-     * overflow, and negative values are all rejected before any
-     * subtraction, so the range checks below cannot overflow.
-     */
     size_t ts_len = strlen(ts_str);
 
     if (ts_len > 20)
@@ -292,13 +341,6 @@ AuthResult auth_verify_at(const char *secret,
     long long ts = (long long)ts_u;
     long long now_ll = (long long)now;
 
-    /*
-     * All three values are non-negative, so the subtractions
-     * below cannot underflow past LLONG_MIN in any realistic
-     * deployment. The forward skew check uses "+ MAX_FUTURE"
-     * to avoid any subtraction on the potentially larger
-     * operand.
-     */
     if (ts > now_ll + AUTH_MAX_FUTURE_SECONDS)
     {
         return AUTH_ERR_TIMESTAMP_RANGE;
@@ -309,9 +351,6 @@ AuthResult auth_verify_at(const char *secret,
         return AUTH_ERR_TIMESTAMP_RANGE;
     }
 
-    /*
-     * Rebuild the canonical MAC input and recompute the MAC.
-     */
     char mac_input[AUTH_MAX_SIGNED_SIZE + 128];
     int m = snprintf(mac_input, sizeof(mac_input),
                      "%s|%s|%s|%s|%s",
@@ -338,11 +377,6 @@ AuthResult auth_verify_at(const char *secret,
     char expected_hex[AUTH_HEX_LEN + 1];
     hmac_sha256_hex(expected_mac, expected_hex);
 
-    /*
-     * Constant-time comparison. Any difference anywhere in
-     * the 64-byte hex string sets the diff accumulator; no
-     * early exit reveals where the mismatch occurred.
-     */
     unsigned char diff = 0;
 
     for (size_t i = 0; i < AUTH_HEX_LEN; i++)
@@ -354,6 +388,24 @@ AuthResult auth_verify_at(const char *secret,
     {
         return AUTH_ERR_MAC_MISMATCH;
     }
+
+    /*
+     * Replay check. Only reached after the MAC has matched,
+     * so unauthenticated input cannot populate the cache.
+     */
+    if (replay_cache_lookup(expected_mac))
+    {
+        return AUTH_ERR_REPLAY_DETECTED;
+    }
+
+    int slot = replay_cache_find_slot(now);
+
+    if (slot < 0)
+    {
+        return AUTH_ERR_REPLAY_CACHE_FULL;
+    }
+
+    replay_cache_insert(slot, expected_mac, now);
 
     size_t msg_len = strlen(message);
 
@@ -387,12 +439,14 @@ const char *auth_result_name(AuthResult result)
 {
     switch (result)
     {
-        case AUTH_OK:                   return "ok";
-        case AUTH_ERR_INVALID_INPUT:    return "invalid_input";
-        case AUTH_ERR_OUTPUT_TOO_SMALL: return "output_too_small";
-        case AUTH_ERR_MALFORMED:        return "malformed";
-        case AUTH_ERR_TIMESTAMP_RANGE:  return "timestamp_range";
-        case AUTH_ERR_MAC_MISMATCH:     return "mac_mismatch";
+        case AUTH_OK:                       return "ok";
+        case AUTH_ERR_INVALID_INPUT:        return "invalid_input";
+        case AUTH_ERR_OUTPUT_TOO_SMALL:     return "output_too_small";
+        case AUTH_ERR_MALFORMED:            return "malformed";
+        case AUTH_ERR_TIMESTAMP_RANGE:      return "timestamp_range";
+        case AUTH_ERR_MAC_MISMATCH:         return "mac_mismatch";
+        case AUTH_ERR_REPLAY_DETECTED:      return "replay_detected";
+        case AUTH_ERR_REPLAY_CACHE_FULL:    return "replay_cache_full";
     }
 
     return "unknown";

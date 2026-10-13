@@ -20,23 +20,43 @@
  *
  * computed with a role-specific shared secret.
  *
- * Both the sender and the receiver must agree on which
- * <direction> and <role> apply. The receiver chooses them
- * from the message type and its own role; the sender chooses
- * them from the message type and its own role. If they
- * disagree, the MACs will not match.
- *
  * This module authenticates messages. It does not encrypt
  * them. Traffic is still plaintext; TLS is out of scope.
+ *
+ * Replay protection: after a message passes MAC verification,
+ * its MAC is recorded in a bounded in-process cache. A second
+ * verification of a byte-identical message within
+ * AUTH_MAX_AGE_SECONDS is rejected as a replay. The cache is
+ * shared across all calls in a process; the coordinator is the
+ * only verifier, so this is sufficient.
  */
 
-/*
- * Maximum size of a signed message. Bounded by the network
- * transport: the coordinator's framing layer rejects any
- * payload larger than NETWORK_MAX_MESSAGE_SIZE. The 128-byte
- * margin covers "|<ts>|<64 hex>" plus safety room.
- */
 #define AUTH_MAX_SIGNED_SIZE (NETWORK_MAX_MESSAGE_SIZE)
+
+/*
+ * Accepted timestamp window. A signed message whose timestamp
+ * is more than AUTH_MAX_AGE_SECONDS in the past, or more than
+ * AUTH_MAX_FUTURE_SECONDS in the future, is rejected before
+ * MAC verification.
+ *
+ * The "future" margin covers modest clock skew between hosts.
+ * These values also define how long a MAC must remain in the
+ * replay cache to keep replay detection meaningful.
+ */
+#define AUTH_MAX_AGE_SECONDS    60
+#define AUTH_MAX_FUTURE_SECONDS 5
+
+/*
+ * Capacity of the recent-MAC cache. The cache holds at most
+ * this many entries; when all slots hold unexpired MACs, a new
+ * verification returns AUTH_ERR_REPLAY_CACHE_FULL rather than
+ * silently disabling replay checks.
+ *
+ * AUTH_MAX_AGE_SECONDS is 60. 8192 entries sustain roughly 136
+ * verifications per second continuously. Above that, the
+ * coordinator rejects until slots expire.
+ */
+#define AUTH_REPLAY_CACHE_SIZE 8192
 
 typedef enum
 {
@@ -60,23 +80,11 @@ typedef enum
     AUTH_ERR_OUTPUT_TOO_SMALL,
     AUTH_ERR_MALFORMED,
     AUTH_ERR_TIMESTAMP_RANGE,
-    AUTH_ERR_MAC_MISMATCH
+    AUTH_ERR_MAC_MISMATCH,
+    AUTH_ERR_REPLAY_DETECTED,
+    AUTH_ERR_REPLAY_CACHE_FULL
 } AuthResult;
 
-/*
- * Sign a message using the current wall-clock time.
- *
- * out must point to a buffer of at least AUTH_MAX_SIGNED_SIZE
- * bytes. On success, out contains the signed wire form and
- * is NUL-terminated.
- *
- * Returns AUTH_OK on success.
- * Returns AUTH_ERR_INVALID_INPUT on NULL secret, NULL message,
- * NULL out, or a message that would produce a signed result
- * larger than AUTH_MAX_SIGNED_SIZE.
- * Returns AUTH_ERR_OUTPUT_TOO_SMALL if out_size cannot hold
- * the result.
- */
 AuthResult auth_sign(const char *secret,
                      AuthDirection direction,
                      AuthRole signer_role,
@@ -84,11 +92,6 @@ AuthResult auth_sign(const char *secret,
                      char *out,
                      size_t out_size);
 
-/*
- * Like auth_sign, but uses the provided timestamp. Intended
- * for unit tests that need to exercise the timestamp window
- * without waiting wall-clock time.
- */
 AuthResult auth_sign_at(const char *secret,
                         AuthDirection direction,
                         AuthRole signer_role,
@@ -97,25 +100,6 @@ AuthResult auth_sign_at(const char *secret,
                         char *out,
                         size_t out_size);
 
-/*
- * Verify a signed message.
- *
- * message_out must point to a buffer of at least
- * AUTH_MAX_SIGNED_SIZE bytes. On AUTH_OK, it contains the
- * original (unsigned) message and is NUL-terminated.
- *
- * Returns AUTH_OK on success.
- * Returns AUTH_ERR_INVALID_INPUT on NULL arguments or zero
- * sized buffers.
- * Returns AUTH_ERR_OUTPUT_TOO_SMALL if message_out_size cannot
- * hold the recovered message.
- * Returns AUTH_ERR_MALFORMED if the signed structure cannot be
- * parsed (missing separator, wrong hex length, non-hex MAC
- * characters, non-digit timestamp).
- * Returns AUTH_ERR_TIMESTAMP_RANGE if the timestamp is outside
- * the accepted window.
- * Returns AUTH_ERR_MAC_MISMATCH if the MAC does not match.
- */
 AuthResult auth_verify(const char *secret,
                        AuthDirection expected_direction,
                        AuthRole expected_signer_role,
@@ -123,10 +107,6 @@ AuthResult auth_verify(const char *secret,
                        char *message_out,
                        size_t message_out_size);
 
-/*
- * Like auth_verify, but treats "now" as the provided time.
- * Intended for unit tests.
- */
 AuthResult auth_verify_at(const char *secret,
                           AuthDirection expected_direction,
                           AuthRole expected_signer_role,
@@ -136,9 +116,12 @@ AuthResult auth_verify_at(const char *secret,
                           size_t message_out_size);
 
 /*
- * Return a stable human-readable name for an AuthResult.
- * Never returns NULL.
+ * Clear the replay cache. Intended for unit tests so that
+ * successive test cases start from a known state. The
+ * production code path never needs to call this.
  */
+void auth_replay_cache_reset(void);
+
 const char *auth_result_name(AuthResult result);
 
 #endif

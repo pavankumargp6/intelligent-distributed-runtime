@@ -158,6 +158,9 @@ test:
 	@echo "===== auth_test.sh ====="
 	bash tests/auth_test.sh
 	@echo ""
+	@echo "===== auth_replay_test.sh ====="
+	bash tests/auth_replay_test.sh
+	@echo ""
 	@echo "===== wal_test.sh ====="
 	bash tests/wal_test.sh
 	@echo ""

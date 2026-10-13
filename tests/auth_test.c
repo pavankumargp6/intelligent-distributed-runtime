@@ -1,9 +1,11 @@
 /*
  * Unit test for the auth module.
  *
- * Covers signing, verification, and every failure mode the
- * module distinguishes. Uses auth_sign_at / auth_verify_at
- * so timestamp-window tests are deterministic and fast.
+ * Covers signing, verification, every failure mode the module
+ * distinguishes, and replay detection.
+ *
+ * Uses auth_sign_at / auth_verify_at where determinism matters,
+ * and the wall-clock variants elsewhere.
  */
 
 #include <stdio.h>
@@ -62,7 +64,6 @@ static void test_tamper_message(void)
               signed_buf,
               sizeof(signed_buf));
 
-    /* Modify one byte in the message portion. */
     signed_buf[0] = 'X';
 
     AuthResult r = auth_verify(secret,
@@ -90,7 +91,6 @@ static void test_tamper_mac(void)
               signed_buf,
               sizeof(signed_buf));
 
-    /* Flip one hex char in the trailing MAC. */
     size_t len = strlen(signed_buf);
     signed_buf[len - 1] = (signed_buf[len - 1] == 'a') ? 'b' : 'a';
 
@@ -145,7 +145,6 @@ static void test_wrong_direction(void)
               signed_buf,
               sizeof(signed_buf));
 
-    /* Verify as if it were a coordinator-to-worker message. */
     AuthResult r = auth_verify(secret,
                                AUTH_DIR_COORD_TO_WORKER,
                                AUTH_ROLE_COORDINATOR,
@@ -171,7 +170,6 @@ static void test_wrong_role(void)
               signed_buf,
               sizeof(signed_buf));
 
-    /* Same direction, wrong signer role. */
     AuthResult r = auth_verify(secret,
                                AUTH_DIR_WORKER_TO_COORD,
                                AUTH_ROLE_CLIENT,
@@ -191,7 +189,6 @@ static void test_old_timestamp(void)
     char signed_buf[AUTH_MAX_SIGNED_SIZE];
     char recovered[AUTH_MAX_SIGNED_SIZE];
 
-    /* Sign with a timestamp 120 seconds in the past. */
     auth_sign_at(secret,
                  AUTH_DIR_CLIENT_TO_COORD,
                  AUTH_ROLE_CLIENT,
@@ -221,7 +218,6 @@ static void test_future_timestamp(void)
     char signed_buf[AUTH_MAX_SIGNED_SIZE];
     char recovered[AUTH_MAX_SIGNED_SIZE];
 
-    /* Sign with a timestamp 60 seconds in the future. */
     auth_sign_at(secret,
                  AUTH_DIR_CLIENT_TO_COORD,
                  AUTH_ROLE_CLIENT,
@@ -251,7 +247,6 @@ static void test_short_skew_accepted(void)
     char signed_buf[AUTH_MAX_SIGNED_SIZE];
     char recovered[AUTH_MAX_SIGNED_SIZE];
 
-    /* Sign 3 seconds in the future — within the skew allowance. */
     auth_sign_at(secret,
                  AUTH_DIR_CLIENT_TO_COORD,
                  AUTH_ROLE_CLIENT,
@@ -292,7 +287,6 @@ static void test_bad_hex_length(void)
     const char *secret = "test-secret-0123456789abcdef";
     char recovered[AUTH_MAX_SIGNED_SIZE];
 
-    /* Timestamp ok, but hex field too short. */
     AuthResult r = auth_verify(secret,
                                AUTH_DIR_CLIENT_TO_COORD,
                                AUTH_ROLE_CLIENT,
@@ -308,7 +302,6 @@ static void test_bad_hex_char(void)
     const char *secret = "test-secret-0123456789abcdef";
     char recovered[AUTH_MAX_SIGNED_SIZE];
 
-    /* 64 chars but one is a non-hex letter. */
     AuthResult r = auth_verify(secret,
                                AUTH_DIR_CLIENT_TO_COORD,
                                AUTH_ROLE_CLIENT,
@@ -326,7 +319,6 @@ static void test_bad_timestamp_digit(void)
     const char *secret = "test-secret-0123456789abcdef";
     char recovered[AUTH_MAX_SIGNED_SIZE];
 
-    /* Timestamp contains a letter. */
     AuthResult r = auth_verify(secret,
                                AUTH_DIR_CLIENT_TO_COORD,
                                AUTH_ROLE_CLIENT,
@@ -371,8 +363,47 @@ static void test_null_inputs(void)
           "verify with NULL signed message rejected");
 }
 
+static void test_replay_detection(void)
+{
+    auth_replay_cache_reset();
+
+    const char *secret = "test-secret-0123456789abcdef";
+    const char *msg = "SUBMIT|4:echo|1|5:hello";
+
+    char signed_buf[AUTH_MAX_SIGNED_SIZE];
+    char recovered[AUTH_MAX_SIGNED_SIZE];
+
+    auth_sign(secret,
+              AUTH_DIR_CLIENT_TO_COORD,
+              AUTH_ROLE_CLIENT,
+              msg,
+              signed_buf,
+              sizeof(signed_buf));
+
+    AuthResult r1 = auth_verify(secret,
+                                AUTH_DIR_CLIENT_TO_COORD,
+                                AUTH_ROLE_CLIENT,
+                                signed_buf,
+                                recovered,
+                                sizeof(recovered));
+
+    CHECK(r1 == AUTH_OK, "replay test: first verify accepted");
+
+    AuthResult r2 = auth_verify(secret,
+                                AUTH_DIR_CLIENT_TO_COORD,
+                                AUTH_ROLE_CLIENT,
+                                signed_buf,
+                                recovered,
+                                sizeof(recovered));
+
+    CHECK(r2 == AUTH_ERR_REPLAY_DETECTED,
+          "replay test: identical second verify rejected");
+}
+
 int main(void)
 {
+    auth_replay_cache_reset();
+
     test_roundtrip();
     test_tamper_message();
     test_tamper_mac();
@@ -387,6 +418,7 @@ int main(void)
     test_bad_hex_char();
     test_bad_timestamp_digit();
     test_null_inputs();
+    test_replay_detection();
 
     if (failures == 0)
     {
