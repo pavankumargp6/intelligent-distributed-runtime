@@ -4,23 +4,19 @@
  * Usage:
  *   bench_client <host> <task_count> <workload:true|sleep1> <task_ids_file>
  *
- *   The task_ids_file receives one task ID per line, in
- *   submission order. The shell driver uses this to know
- *   which task IDs to expect in the coordinator's task_latency
- *   events.
- *
  * On success, prints to stdout:
- *   submission_start_ns=<n>        monotonic clock, ns
- *   submission_end_ns=<n>          monotonic clock, ns
+ *   submission_start_ns=<n>
+ *   submission_end_ns=<n>
  *   tasks_submitted=<n>
- *   submission_throughput=<n>      tasks / second
+ *   submission_throughput=<n>
+ *   retries=<n>                number of SUBMIT_REJECT retries
  *
- * Exit 0 on success, 1 on any error.
+ * Exit 0 on success, 1 on any unrecoverable error.
  *
- * This client opens one TCP connection per submission,
- * matching the current coordinator design. If the coordinator
- * ever moves to persistent connections, this client will
- * change accordingly.
+ * When the coordinator rejects a submission with SUBMIT_REJECT
+ * (queue full), the client sleeps briefly and retries the same
+ * submission. The retry count is bounded to avoid an infinite
+ * loop if the coordinator is genuinely unhealthy.
  */
 
 #include <stdio.h>
@@ -28,6 +24,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <errno.h>
 #include <unistd.h>
 
 #include <sys/socket.h>
@@ -40,6 +37,8 @@
 #include "auth_config.h"
 
 #define RUNTIME_SERVER_PORT 5001
+#define MAX_RETRIES_PER_SUBMIT 5000
+#define RETRY_SLEEP_NS 500000L   /* 0.5 ms */
 
 static uint64_t now_ns(void)
 {
@@ -47,6 +46,14 @@ static uint64_t now_ns(void)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL +
            (uint64_t)ts.tv_nsec;
+}
+
+static void sleep_ns(long ns)
+{
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = ns;
+    nanosleep(&ts, NULL);
 }
 
 static int connect_to_server(const char *host)
@@ -81,6 +88,12 @@ static int connect_to_server(const char *host)
     return fd;
 }
 
+/*
+ * Return values:
+ *   1   success; *task_id_out set
+ *   0   unrecoverable error
+ *  -1   coordinator replied SUBMIT_REJECT; caller should retry
+ */
 static int submit_one(const char *host,
                       const char *command,
                       const char *argument,
@@ -177,6 +190,11 @@ static int submit_one(const char *host,
         final = verified;
     }
 
+    if (strcmp(final, "SUBMIT_REJECT") == 0)
+    {
+        return -1;
+    }
+
     if (strncmp(final, "SUBMIT_ACK|", 11) != 0)
     {
         fprintf(stderr, "unexpected response: %s\n", final);
@@ -256,14 +274,43 @@ int main(int argc, char *argv[])
     }
 
     uint64_t t_start = now_ns();
+    long total_retries = 0;
 
     for (int i = 0; i < task_count; i++)
     {
         int id = 0;
+        int attempt = 0;
+        int ok = 0;
 
-        if (!submit_one(host, command, argument, &id))
+        while (attempt < MAX_RETRIES_PER_SUBMIT)
         {
-            fprintf(stderr, "submit %d failed\n", i);
+            int rc = submit_one(host, command, argument, &id);
+
+            if (rc == 1)
+            {
+                ok = 1;
+                break;
+            }
+
+            if (rc == 0)
+            {
+                fprintf(stderr, "submit %d failed\n", i);
+                fclose(ids);
+                return 1;
+            }
+
+            /* rc == -1: SUBMIT_REJECT, back off and retry. */
+            total_retries++;
+            attempt++;
+            sleep_ns(RETRY_SLEEP_NS);
+        }
+
+        if (!ok)
+        {
+            fprintf(stderr,
+                    "submit %d exhausted %d retries\n",
+                    i,
+                    MAX_RETRIES_PER_SUBMIT);
             fclose(ids);
             return 1;
         }
@@ -287,6 +334,7 @@ int main(int argc, char *argv[])
            (unsigned long long)t_end);
     printf("tasks_submitted=%d\n", task_count);
     printf("submission_throughput=%.2f\n", throughput);
+    printf("retries=%ld\n", total_retries);
 
     return 0;
 }
