@@ -25,7 +25,11 @@ jobs:
 
       - name: make asan
         run: make asan
+      - name: make ubsan
+        run: make ubsan
 
+      - name: make analyzer
+        run: make analyzer
       - name: make test
         run: make test
 
