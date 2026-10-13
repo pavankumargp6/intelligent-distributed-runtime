@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
+#include <time.h>
 #include <sys/types.h>
 
 #include "worker.h"
@@ -14,8 +15,77 @@
 #include "log.h"
 
 #define RUNTIME_ADDRESS "127.0.0.1"
-#define HEARTBEAT_INTERVAL_SECONDS 3
+#define DEFAULT_AGENT_INTERVAL_SECONDS 3
 #define RETRY_INTERVAL_SECONDS 3
+
+/*
+ * Configurable agent cycle interval. Defaults to 3 seconds,
+ * matching the original hardcoded value. Setting the
+ * IDR_AGENT_INTERVAL_SECONDS environment variable to 0 (or a
+ * fractional value) reduces the delay between task poll
+ * cycles.
+ *
+ * This is a benchmark affordance: it lets the performance
+ * harness observe the runtime's actual per-task overhead
+ * instead of waiting on the default 3-second idle timer. It
+ * does not change the worker's architecture.
+ *
+ * Values outside [0, 3600] are rejected with a warning and the
+ * default is used.
+ */
+static double parse_agent_interval(void)
+{
+    const char *env = getenv("IDR_AGENT_INTERVAL_SECONDS");
+
+    if (env == NULL || env[0] == '\0')
+    {
+        return (double)DEFAULT_AGENT_INTERVAL_SECONDS;
+    }
+
+    char *end = NULL;
+    double parsed = strtod(env, &end);
+
+    if (end == env || *end != '\0' ||
+        parsed < 0.0 || parsed > 3600.0)
+    {
+        fprintf(stderr,
+                "warning: IDR_AGENT_INTERVAL_SECONDS=%s is invalid; "
+                "using default %d\n",
+                env,
+                DEFAULT_AGENT_INTERVAL_SECONDS);
+        return (double)DEFAULT_AGENT_INTERVAL_SECONDS;
+    }
+
+    return parsed;
+}
+
+static void sleep_seconds(double seconds)
+{
+    if (seconds <= 0.0)
+    {
+        return;
+    }
+
+    struct timespec ts;
+    ts.tv_sec = (time_t)seconds;
+    ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1e9);
+
+    if (ts.tv_nsec < 0)
+    {
+        ts.tv_nsec = 0;
+    }
+
+    struct timespec rem = {0};
+
+    while (nanosleep(&ts, &rem) != 0)
+    {
+        if (errno != EINTR)
+        {
+            break;
+        }
+        ts = rem;
+    }
+}
 
 static void run_task_in_child(const struct Worker *worker,
                               const struct Task *assigned)
@@ -94,6 +164,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    double agent_interval = parse_agent_interval();
+
     printf("\n========================================\n");
     printf("             WORKER AGENT\n");
     printf("========================================\n");
@@ -106,6 +178,7 @@ int main(int argc, char *argv[])
            worker.resources.total_memory_mb);
     printf("Available Memory : %ld MB\n",
            worker.resources.available_memory_mb);
+    printf("Cycle interval   : %.3f s\n", agent_interval);
     printf("========================================\n");
 
     int registered = 0;
@@ -135,7 +208,7 @@ int main(int argc, char *argv[])
             }
         }
 
-        sleep(HEARTBEAT_INTERVAL_SECONDS);
+        sleep_seconds(agent_interval);
 
         log_debug("heartbeat_sending",
                   "Sending heartbeat for worker %d...",
