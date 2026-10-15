@@ -93,6 +93,25 @@ static int parse_submit(const char *message,
         }
     }
 
+    /*
+     * Optional trailing field: "<timeout_seconds>". If absent,
+     * defaults to 0 (no execution time limit). Only meaningful
+     * when the idempotent field is present, per the positional
+     * trailing-field rule.
+     */
+    if (*cursor == '|')
+    {
+        cursor++;
+
+        long timeout = 0;
+
+        if (wire_read_int(&cursor, &timeout))
+        {
+            task->timeout_seconds =
+                (timeout > 0) ? (int)timeout : 0;
+        }
+    }
+
     return 1;
 }
 
@@ -152,6 +171,13 @@ static int build_task_assign(const struct Task *task,
         if (offset == 0) return 0;
     }
 
+    offset = wire_append_delimiter(buffer, buffer_size, offset);
+    if (offset == 0) return 0;
+
+    offset = wire_append_int(buffer, buffer_size, offset,
+                             task->timeout_seconds);
+    if (offset == 0) return 0;
+
     return 1;
 }
 
@@ -209,6 +235,13 @@ static int build_wal_submit(const struct Task *task,
     if (offset == 0) return 0;
 
     offset = wire_append_int(buffer, buffer_size, offset, task->idempotent);
+    if (offset == 0) return 0;
+
+    offset = wire_append_delimiter(buffer, buffer_size, offset);
+    if (offset == 0) return 0;
+
+    offset = wire_append_int(buffer, buffer_size, offset,
+                             task->timeout_seconds);
     if (offset == 0) return 0;
 
     return 1;

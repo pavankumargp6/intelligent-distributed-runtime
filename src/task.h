@@ -12,7 +12,8 @@ enum TaskState
     TASK_CREATED = 0,
     TASK_RUNNING = 1,
     TASK_COMPLETED = 2,
-    TASK_FAILED = 3
+    TASK_FAILED = 3,
+    TASK_TIMED_OUT = 4
 };
 
 struct Task
@@ -24,11 +25,30 @@ struct Task
     int argument_count;
     char arguments[TASK_ARGUMENT_COUNT][TASK_ARGUMENT_SIZE];
 
+    /*
+     * Resource requirements for this task.
+     *
+     * CPU requirement is expressed as a percentage
+     * of one CPU core.
+     *
+     * Memory requirement is expressed in megabytes.
+     */
     double required_cpu_percent;
     long required_memory_mb;
 
+    /*
+     * ID of the worker selected to execute
+     * this task.
+     *
+     * A value of -1 means that no worker
+     * has been assigned yet.
+     */
     int assigned_worker_id;
 
+    /*
+     * Timing and execution metrics
+     * collected during the task lifecycle.
+     */
     struct TaskMetrics metrics;
 
     enum TaskState state;
@@ -40,7 +60,17 @@ struct Task
      */
     int idempotent;
 
+    /*
+     * Maximum execution time in seconds, or 0 for no limit.
+     *
+     * Applies from the moment the worker starts the task
+     * process. Queue wait and dispatch time do not count
+     * against it.
+     */
+    int timeout_seconds;
+
     int pid;
     int exit_status;
 };
+
 #endif

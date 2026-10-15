@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -106,18 +107,58 @@ static int parse_submit_record(const char *line,
         }
     }
 
+
     task.argument_count = (int)argc;
 
+    /*
+     * Optional trailing field: idempotent (0 or 1).
+     *
+     * Older WAL records may not contain this field,
+     * so the task defaults to non-idempotent.
+     */
     if (*cursor == '|')
     {
         cursor++;
+
         long idem = 0;
+
         if (wire_read_int(&cursor, &idem))
         {
             task.idempotent = idem ? 1 : 0;
         }
     }
 
+    /*
+     * Optional trailing field: timeout in seconds.
+     *
+     * Zero means no execution timeout.
+     * Older WAL records without this field remain valid.
+     */
+    if (*cursor == '|')
+    {
+        cursor++;
+
+        long timeout = 0;
+
+        if (wire_read_int(&cursor, &timeout))
+        {
+            task.timeout_seconds =
+                (timeout > 0 && timeout <= INT_MAX)
+                    ? (int)timeout
+                    : 0;
+        }
+    }
+
+
+    if (*cursor == '|')
+    {
+        cursor++;
+        long timeout = 0;
+        if (wire_read_int(&cursor, &timeout))
+        {
+            task.timeout_seconds = (timeout > 0) ? (int)timeout : 0;
+        }
+    }
     *task_id_out = (int)task_id;
     *task_out = task;
 

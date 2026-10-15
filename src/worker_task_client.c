@@ -185,6 +185,19 @@ static int parse_task_assign(const char *message,
 
     task->argument_count = (int)argument_count;
 
+    if (!wire_read_delimiter(&cursor))
+    {
+        return 0;
+    }
+
+    long timeout = 0;
+
+    if (!wire_read_int(&cursor, &timeout))
+    {
+        return 0;
+    }
+
+    task->timeout_seconds = (timeout > 0) ? (int)timeout : 0;
     return 1;
 }
 
