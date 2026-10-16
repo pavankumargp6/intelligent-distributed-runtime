@@ -107,7 +107,6 @@ static int parse_submit_record(const char *line,
         }
     }
 
-
     task.argument_count = (int)argc;
 
     /*
@@ -133,6 +132,12 @@ static int parse_submit_record(const char *line,
      *
      * Zero means no execution timeout.
      * Older WAL records without this field remain valid.
+     *
+     * Out-of-range values are clamped to 0 (unlimited) rather
+     * than rejecting the whole record: the SUBMIT was already
+     * accepted and durably written, so dropping it on recovery
+     * would lose a task the coordinator previously promised to
+     * run. A warning is emitted so the anomaly is observable.
      */
     if (*cursor == '|')
     {
@@ -140,25 +145,25 @@ static int parse_submit_record(const char *line,
 
         long timeout = 0;
 
-        if (wire_read_int(&cursor, &timeout))
+        if (!wire_read_int(&cursor, &timeout))
         {
-            task.timeout_seconds =
-                (timeout > 0 && timeout <= INT_MAX)
-                    ? (int)timeout
-                    : 0;
+            log_warn("wal_submit_bad_timeout",
+                     "Malformed timeout field in SUBMIT record; "
+                     "treating as no timeout");
+        }
+        else if (timeout < 0 || timeout > INT_MAX)
+        {
+            log_warn("wal_submit_timeout_out_of_range",
+                     "Timeout %ld out of range in SUBMIT record; "
+                     "treating as no timeout",
+                     timeout);
+        }
+        else
+        {
+            task.timeout_seconds = (int)timeout;
         }
     }
 
-
-    if (*cursor == '|')
-    {
-        cursor++;
-        long timeout = 0;
-        if (wire_read_int(&cursor, &timeout))
-        {
-            task.timeout_seconds = (timeout > 0) ? (int)timeout : 0;
-        }
-    }
     *task_id_out = (int)task_id;
     *task_out = task;
 

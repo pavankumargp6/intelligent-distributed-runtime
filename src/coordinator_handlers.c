@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -98,6 +99,11 @@ static int parse_submit(const char *message,
      * defaults to 0 (no execution time limit). Only meaningful
      * when the idempotent field is present, per the positional
      * trailing-field rule.
+     *
+     * Negative or out-of-range values are rejected outright. We
+     * do not silently coerce them to 0 because "0" means
+     * "unlimited" and a client that asked for -1 must not be
+     * silently granted an unbounded execution.
      */
     if (*cursor == '|')
     {
@@ -105,11 +111,17 @@ static int parse_submit(const char *message,
 
         long timeout = 0;
 
-        if (wire_read_int(&cursor, &timeout))
+        if (!wire_read_int(&cursor, &timeout))
         {
-            task->timeout_seconds =
-                (timeout > 0) ? (int)timeout : 0;
+            return 0;
         }
+
+        if (timeout < 0 || timeout > INT_MAX)
+        {
+            return 0;
+        }
+
+        task->timeout_seconds = (int)timeout;
     }
 
     return 1;
