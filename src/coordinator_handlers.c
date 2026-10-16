@@ -599,11 +599,14 @@ int coordinator_handle_task_result(struct Runtime *runtime,
                               task.metrics.queue_wait_seconds,
                               task.metrics.execution_seconds);
     }
+    else if (task.state == TASK_TIMED_OUT)
+    {
+        record_task_timed_out(&runtime->stats);
+    }
     else
     {
         record_task_failed(&runtime->stats);
     }
-
     pool_send_message(conn, "TASK_RESULT_ACK");
 
     return 1;
@@ -734,20 +737,23 @@ int coordinator_handle_status(struct Runtime *runtime,
     int submitted = runtime->stats.tasks_submitted;
     int completed = runtime->stats.tasks_completed;
     int failed = runtime->stats.tasks_failed;
+    int timed_out = runtime->stats.tasks_timed_out;
 
-    char response[256];
+    char response[320];
 
     int n = snprintf(response,
                      sizeof(response),
                      "STATUS_REPLY|workers=%d|active=%d|queue=%d|"
-                     "inflight=%d|submitted=%d|completed=%d|failed=%d",
+                     "inflight=%d|submitted=%d|completed=%d|"
+                     "failed=%d|timed_out=%d",
                      workers,
                      active,
                      queue,
                      inflight,
                      submitted,
                      completed,
-                     failed);
+                     failed,
+                     timed_out);
 
     if (n <= 0 || (size_t)n >= sizeof(response))
     {
@@ -758,15 +764,15 @@ int coordinator_handle_status(struct Runtime *runtime,
 
     log_info("status_reported",
              "STATUS workers=%d active=%d queue=%d inflight=%d "
-             "submitted=%d completed=%d failed=%d",
+             "submitted=%d completed=%d failed=%d timed_out=%d",
              workers,
              active,
              queue,
              inflight,
              submitted,
              completed,
-             failed);
-
+             failed,
+             timed_out);
     return 1;
 }
 

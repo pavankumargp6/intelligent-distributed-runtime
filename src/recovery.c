@@ -343,11 +343,14 @@ int recovery_replay_wal(struct Runtime *runtime,
             {
                 runtime->stats.tasks_completed++;
             }
+            else if (res->state == (int)TASK_TIMED_OUT)
+            {
+                runtime->stats.tasks_timed_out++;
+            }
             else
             {
                 runtime->stats.tasks_failed++;
             }
-
             completed++;
         }
         else

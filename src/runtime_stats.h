@@ -12,6 +12,7 @@ struct RuntimeStats
     int tasks_submitted;
     int tasks_completed;
     int tasks_failed;
+    int tasks_timed_out;
 
     double total_queue_wait_seconds;
     double total_execution_seconds;
@@ -42,6 +43,15 @@ void record_task_completed(
 void record_task_failed(struct RuntimeStats *stats);
 
 /*
+ * Record a task that hit its execution timeout.
+ *
+ * Kept separate from record_task_failed so operators can
+ * distinguish "the command ran and returned non-zero" from
+ * "the command was killed because it exceeded its deadline".
+ */
+void record_task_timed_out(struct RuntimeStats *stats);
+
+/*
  * Calculate average queue wait time.
  */
 double get_average_queue_wait(
@@ -54,5 +64,4 @@ double get_average_queue_wait(
 double get_average_execution_time(
     const struct RuntimeStats *stats
 );
-
 #endif
