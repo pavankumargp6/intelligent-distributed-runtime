@@ -5,8 +5,16 @@
  *   - succeed on a missing file (nothing to do)
  *   - succeed on an empty file (nothing to do)
  *   - keep RESULT records for completed tasks
- *   - drop SUBMIT records for completed tasks
- *   - keep SUBMIT records for tasks without a result
+ *   - keep SUBMIT records for every task, including completed ones
+ *   - be idempotent: a second pass changes nothing
+ *
+ * History note: an earlier policy dropped the SUBMIT once a
+ * matching RESULT existed. That was a correctness bug — the
+ * SUBMIT carries command, arguments, idempotent, and
+ * timeout_seconds, and recovery_replay_wal iterates over SUBMITs
+ * matching each against a RESULT. Dropping the SUBMIT left the
+ * RESULT orphaned and the task silently lost on restart. This
+ * test now pins the corrected behavior.
  */
 
 #include <stdio.h>
@@ -122,25 +130,30 @@ int main(void)
 
     CHECK(recovery_compact_wal(path) == 1,
           "compact on mixed file returns 1");
-    CHECK(count_lines(path) == 3,
-          "compacted file has exactly 3 lines");
 
+    /*
+     * Every SUBMIT and RESULT line is preserved. No records are
+     * dropped, so the compacted file has the same number of lines
+     * as the input.
+     */
+    CHECK(count_lines(path) == 5,
+          "compacted file preserves all 5 lines");
+
+    CHECK(file_contains(path, "SUBMIT|1|4:echo|1|4:task|0"),
+          "SUBMIT for completed task 1 kept");
     CHECK(file_contains(path, "RESULT|1|1|0|2"),
           "RESULT for completed task 1 kept");
-    CHECK(file_contains(path, "RESULT|3|1|0|2"),
-          "RESULT for completed task 3 kept");
     CHECK(file_contains(path, "SUBMIT|2|5:sleep|1|2:30|0"),
           "SUBMIT for pending task 2 kept");
-
-    CHECK(!file_contains(path, "SUBMIT|1|4:echo|1|4:task|0"),
-          "SUBMIT for completed task 1 dropped");
-    CHECK(!file_contains(path, "SUBMIT|3|4:echo|1|4:task|0"),
-          "SUBMIT for completed task 3 dropped");
+    CHECK(file_contains(path, "SUBMIT|3|4:echo|1|4:task|0"),
+          "SUBMIT for completed task 3 kept");
+    CHECK(file_contains(path, "RESULT|3|1|0|2"),
+          "RESULT for completed task 3 kept");
 
     /* ---- Case 4: idempotent compaction ---- */
     CHECK(recovery_compact_wal(path) == 1,
           "compact on already-compacted file returns 1");
-    CHECK(count_lines(path) == 3,
+    CHECK(count_lines(path) == 5,
           "second compaction does not change line count");
 
     unlink(path);

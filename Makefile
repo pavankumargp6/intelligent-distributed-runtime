@@ -71,8 +71,8 @@ CLIENT_STATUS_BIN = $(BUILD)/client_status
 
 ASAN_BUILD  = $(BUILD)/asan
 ASAN_CFLAGS = $(CFLAGS) -g -O1 \
-              -fsanitize=address,undefined \
-              -fno-omit-frame-pointer
+	      -fsanitize=address,undefined \
+	      -fno-omit-frame-pointer
 
 ASAN_COORDINATOR   = $(ASAN_BUILD)/runtime_server
 ASAN_WORKER        = $(ASAN_BUILD)/worker_agent
@@ -82,8 +82,8 @@ ASAN_CLIENT_STATUS = $(ASAN_BUILD)/client_status
 
 UBSAN_BUILD  = $(BUILD)/ubsan
 UBSAN_CFLAGS = $(CFLAGS) -g -O1 \
-               -fsanitize=undefined \
-               -fno-omit-frame-pointer
+	       -fsanitize=undefined \
+	       -fno-omit-frame-pointer
 
 UBSAN_COORDINATOR   = $(UBSAN_BUILD)/runtime_server
 UBSAN_WORKER        = $(UBSAN_BUILD)/worker_agent
@@ -184,7 +184,7 @@ $(UBSAN_CLIENT_STATUS): $(CLIENT_STATUS_SRCS)
 	$(CC) $(UBSAN_CFLAGS) $^ -o $@
 
 analyzer: $(ANALYZER_COORDINATOR) $(ANALYZER_WORKER) \
-          $(ANALYZER_CLIENT_SUB) $(ANALYZER_CLIENT_QRY) $(ANALYZER_CLIENT_STATUS)
+	  $(ANALYZER_CLIENT_SUB) $(ANALYZER_CLIENT_QRY) $(ANALYZER_CLIENT_STATUS)
 	@echo ""
 	@echo "Static analysis complete: $(ANALYZER_BUILD)/"
 	@echo "If no diagnostics appeared above, the analysis found nothing."
@@ -248,6 +248,9 @@ test:
 	@echo ""
 	@echo "===== recovery_compact_test.sh ====="
 	bash tests/recovery_compact_test.sh
+	@echo ""
+	@echo "===== wal_meta_recovery_test.sh ====="
+	bash tests/wal_meta_recovery_test.sh
 	@echo ""
 	@echo "===== wal_overflow_test.sh ====="
 	bash tests/wal_overflow_test.sh

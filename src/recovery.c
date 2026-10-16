@@ -471,17 +471,27 @@ static int compact_write_cb(const char *line, void *user)
 {
     struct CompactWriteCtx *wctx = user;
     int task_id = 0;
-    int is_result = 0;
 
-    if (sscanf(line, "SUBMIT|%d", &task_id) == 1)
-    {
-        is_result = 0;
-    }
-    else if (sscanf(line, "RESULT|%d", &task_id) == 1)
-    {
-        is_result = 1;
-    }
-    else
+    /*
+     * Keep every SUBMIT and RESULT line for any task_id that
+     * appears in the index.
+     *
+     * The previous policy dropped the SUBMIT once a matching
+     * RESULT existed, on the theory that the RESULT subsumed it.
+     * That was wrong: the SUBMIT carries command, arguments,
+     * idempotent, and timeout_seconds, none of which the RESULT
+     * contains, and recovery_replay_wal iterates over SUBMITs,
+     * matching each against a RESULT. Dropping the SUBMIT made
+     * the RESULT an orphan that replay silently ignored, wiping
+     * the task's state on the first restart.
+     *
+     * Trade-off: the WAL no longer shrinks for completed tasks.
+     * A future milestone can compact more aggressively once
+     * recovery can synthesize state from RESULT alone, but for
+     * now we prefer a larger WAL over silently losing tasks.
+     */
+    if (sscanf(line, "SUBMIT|%d", &task_id) != 1 &&
+        sscanf(line, "RESULT|%d", &task_id) != 1)
     {
         return 1;
     }
@@ -493,26 +503,11 @@ static int compact_write_cb(const char *line, void *user)
         return 1;
     }
 
-    int keep = 0;
-
-    if (is_result)
-    {
-        keep = 1;
-    }
-    else if (!wctx->idx->entries[pos].has_result)
-    {
-        keep = 1;
-    }
-
-    if (keep)
-    {
-        fprintf(wctx->out, "%s\n", line);
-        wctx->lines_written++;
-    }
+    fprintf(wctx->out, "%s\n", line);
+    wctx->lines_written++;
 
     return 1;
 }
-
 int recovery_compact_wal(const char *path)
 {
     if (path == NULL)
