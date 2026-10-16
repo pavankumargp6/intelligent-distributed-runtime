@@ -1,4 +1,3 @@
-
 #include <errno.h>
 #include <limits.h>
 #include <signal.h>
@@ -24,6 +23,48 @@ static double elapsed_seconds(const struct timespec *start,
            (double)(now->tv_nsec - start->tv_nsec) / 1000000000.0;
 }
 
+/*
+ * Terminate the task process and its entire process group, then
+ * block until the direct child is reaped.
+ *
+ * Safe to call whether the child is still running, already exited,
+ * or its process group has vanished. Idempotent: task->pid is set
+ * to -1 so a second call returns immediately.
+ */
+static void terminate_and_reap(struct Task *task)
+{
+    if (task == NULL || task->pid <= 0)
+    {
+        return;
+    }
+
+    /*
+     * The child called setpgid(0, 0) before exec, so its pgid
+     * equals its pid. Killing the negative pid signals the whole
+     * group: the direct child plus any descendants it spawned.
+     *
+     * If the child failed to setpgid (e.g. exec raced ahead), no
+     * process group exists with pgid == child pid, so kill(-pid)
+     * returns ESRCH and we fall back to killing the direct child
+     * only. That is the pre-existing behavior and is safe.
+     */
+    if (kill(-task->pid, SIGKILL) < 0 && errno != ESRCH)
+    {
+        /* Best-effort fallback: kill the direct child. */
+        (void)kill(task->pid, SIGKILL);
+    }
+
+    int status = 0;
+    pid_t result;
+
+    do
+    {
+        result = waitpid(task->pid, &status, 0);
+    } while (result < 0 && errno == EINTR);
+
+    task->pid = -1;
+}
+
 int start_task(struct Task *task)
 {
     if (task == NULL)
@@ -33,6 +74,19 @@ int start_task(struct Task *task)
 
     if (task->argument_count < 0 ||
         task->argument_count > TASK_ARGUMENT_COUNT)
+    {
+        task->state = TASK_FAILED;
+        task->exit_status = -1;
+        return 0;
+    }
+
+    /*
+     * A negative timeout must not reach fork(). parse_submit()
+     * rejects it at the coordinator, but we defend here too so
+     * that no code path can spawn a child that wait_for_task()
+     * then refuses to wait on.
+     */
+    if (task->timeout_seconds < 0)
     {
         task->state = TASK_FAILED;
         task->exit_status = -1;
@@ -61,6 +115,17 @@ int start_task(struct Task *task)
 
     if (pid == 0)
     {
+        /*
+         * Put the child in its own process group so the parent
+         * can kill the entire subtree on timeout. Without this, a
+         * task like "bash -c 'sleep 100 & wait'" would leave the
+         * background sleep running after the direct child dies.
+         *
+         * If setpgid fails we still exec: the timeout path will
+         * fall back to killing just the direct child.
+         */
+        (void)setpgid(0, 0);
+
         execvp(task->command, argv);
         perror("execvp");
         _exit(127);
@@ -90,13 +155,21 @@ int start_assigned_task(struct Task *task)
 
 int wait_for_task(struct Task *task)
 {
-    if (task == NULL || task->pid <= 0)
+    if (task == NULL)
     {
+        return 0;
+    }
+
+    if (task->pid <= 0)
+    {
+        task->state = TASK_FAILED;
+        task->exit_status = -1;
         return 0;
     }
 
     if (task->timeout_seconds < 0)
     {
+        terminate_and_reap(task);
         task->state = TASK_FAILED;
         task->exit_status = -1;
         return 0;
@@ -107,6 +180,7 @@ int wait_for_task(struct Task *task)
 
     if (!monotonic_now(&start))
     {
+        terminate_and_reap(task);
         task->state = TASK_FAILED;
         task->exit_status = -1;
         return 0;
@@ -132,6 +206,7 @@ int wait_for_task(struct Task *task)
                 task->exit_status = -1;
             }
 
+            task->pid = -1;
             return 1;
         }
 
@@ -142,6 +217,7 @@ int wait_for_task(struct Task *task)
                 continue;
             }
 
+            terminate_and_reap(task);
             task->state = TASK_FAILED;
             task->exit_status = -1;
             return 0;
@@ -151,6 +227,7 @@ int wait_for_task(struct Task *task)
         {
             if (!monotonic_now(&now))
             {
+                terminate_and_reap(task);
                 task->state = TASK_FAILED;
                 task->exit_status = -1;
                 return 0;
@@ -159,29 +236,7 @@ int wait_for_task(struct Task *task)
             if (elapsed_seconds(&start, &now) >=
                 (double)task->timeout_seconds)
             {
-                /*
-                 * Timeout reached. Terminate the task process
-                 * and reap it so it does not remain a zombie.
-                 */
-                if (kill(task->pid, SIGKILL) < 0 && errno != ESRCH)
-                {
-                    task->state = TASK_FAILED;
-                    task->exit_status = -1;
-                    return 0;
-                }
-
-                do
-                {
-                    result = waitpid(task->pid, &status, 0);
-                } while (result < 0 && errno == EINTR);
-
-                if (result != task->pid)
-                {
-                    task->state = TASK_FAILED;
-                    task->exit_status = -1;
-                    return 0;
-                }
-
+                terminate_and_reap(task);
                 task->state = TASK_TIMED_OUT;
                 task->exit_status = -1;
                 return 1;
@@ -197,6 +252,7 @@ int wait_for_task(struct Task *task)
         {
             if (errno != EINTR)
             {
+                terminate_and_reap(task);
                 task->state = TASK_FAILED;
                 task->exit_status = -1;
                 return 0;
