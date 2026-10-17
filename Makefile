@@ -102,7 +102,7 @@ ANALYZER_CLIENT_STATUS = $(ANALYZER_BUILD)/client_status
 
 .PHONY: all asan ubsan analyzer test clean help
 
-all: $(COORDINATOR_BIN) $(WORKER_BIN) \
+all: $(COORDINATOR_BIN) $(WORKER_BIN) \ $(BUILD)/raw_submit
      $(CLIENT_SUB_BIN) $(CLIENT_QRY_BIN) $(CLIENT_STATUS_BIN)
 	@echo ""
 	@echo "Build complete:"
@@ -249,6 +249,10 @@ test:
 	@echo "===== recovery_compact_test.sh ====="
 	bash tests/recovery_compact_test.sh
 	@echo ""
+	@echo ""
+	@echo "===== raw_submit_test.sh ====="
+	bash tests/raw_submit_test.sh
+
 	@echo "===== wal_meta_recovery_test.sh ====="
 	bash tests/wal_meta_recovery_test.sh
 	@echo ""
@@ -296,3 +300,7 @@ help:
 	@echo "  make test    run unit and integration tests"
 	@echo "  make clean   remove $(BUILD)/"
 	@echo "  make help    this message"
+
+
+$(BUILD)/raw_submit: tests/raw_submit.c $(COMMON_SRCS)
+	$(CC) $(CFLAGS) tests/raw_submit.c $(COMMON_SRCS) -o $@
