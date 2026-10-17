@@ -38,7 +38,7 @@ done
 ss -ltn 2>/dev/null | grep -q ':5001 ' || fail "coordinator did not start listening"
 
 send() {
-    echo "send: $1"
+    echo "send: $1" >&2
     ./build/raw_submit "$1"
 }
 

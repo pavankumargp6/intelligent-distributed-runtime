@@ -102,8 +102,9 @@ ANALYZER_CLIENT_STATUS = $(ANALYZER_BUILD)/client_status
 
 .PHONY: all asan ubsan analyzer test clean help
 
-all: $(COORDINATOR_BIN) $(WORKER_BIN) \ $(BUILD)/raw_submit
-     $(CLIENT_SUB_BIN) $(CLIENT_QRY_BIN) $(CLIENT_STATUS_BIN)
+all: $(COORDINATOR_BIN) $(WORKER_BIN) \
+     $(CLIENT_SUB_BIN) $(CLIENT_QRY_BIN) $(CLIENT_STATUS_BIN) \
+     $(BUILD)/raw_submit
 	@echo ""
 	@echo "Build complete:"
 	@echo "  $(COORDINATOR_BIN)"
@@ -111,6 +112,9 @@ all: $(COORDINATOR_BIN) $(WORKER_BIN) \ $(BUILD)/raw_submit
 	@echo "  $(CLIENT_SUB_BIN)"
 	@echo "  $(CLIENT_QRY_BIN)"
 	@echo "  $(CLIENT_STATUS_BIN)"
+
+$(BUILD)/raw_submit: tests/raw_submit.c $(COMMON_SRCS)
+	$(CC) $(CFLAGS) tests/raw_submit.c $(COMMON_SRCS) -o $@
 
 $(COORDINATOR_BIN): $(COORDINATOR_SRCS)
 	@mkdir -p $(BUILD)
@@ -302,5 +306,3 @@ help:
 	@echo "  make help    this message"
 
 
-$(BUILD)/raw_submit: tests/raw_submit.c $(COMMON_SRCS)
-	$(CC) $(CFLAGS) tests/raw_submit.c $(COMMON_SRCS) -o $@
