@@ -256,7 +256,9 @@ test:
 	@echo ""
 	@echo "===== raw_submit_test.sh ====="
 	bash tests/raw_submit_test.sh
-
+	@echo ""
+	@echo "===== worker_reincarnation_test.sh ====="
+	bash tests/worker_reincarnation_test.sh
 	@echo "===== wal_meta_recovery_test.sh ====="
 	bash tests/wal_meta_recovery_test.sh
 	@echo ""
