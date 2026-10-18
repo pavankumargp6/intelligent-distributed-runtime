@@ -6,14 +6,12 @@ IDR is a fault-tolerant, distributed task execution engine written in C. It is d
 
 The system follows a Coordinator-Worker architecture. The Coordinator manages state, handles scheduling, and writes to a Write-Ahead Log (WAL) for crash recovery. Workers pull tasks, report heartbeats, and manage process lifecycles.
 
-```mermaid
 graph TD
-    Client[Client] -->|SUBMIT / QUERY / METRICS| Coordinator
-    Coordinator -->|WAL Append / fsync| Disk[(Write-Ahead Log)]
-    Worker[Worker] -->|REGISTER / HEARTBEAT| Coordinator
-    Coordinator -->|TASK_ASSIGN| Worker
-    Worker -->|TASK_ACCEPT / TASK_RESULT| Coordinator
-
+    Client["Client"] -->|"SUBMIT / QUERY / METRICS"| Coordinator["Coordinator"]
+    Coordinator -->|"WAL Append / fsync"| Disk[("Write-Ahead Log")]
+    Worker["Worker"] -->|"REGISTER / HEARTBEAT"| Coordinator
+    Coordinator -->|"TASK_ASSIGN"| Worker
+    Worker -->|"TASK_ACCEPT / TASK_RESULT"| Coordinator
 
 # Intelligent Distributed Runtime (IDR)
 
