@@ -111,31 +111,7 @@ static int make_tcp_pair(int *out_server, int *out_client)
     if (server < 0)
     {
         close(client);
-        
-    /* ---- Test malformed oversized frame ---- */
-    {
-        int fd_pair[2];
-        socketpair(AF_UNIX, SOCK_STREAM, 0, fd_pair);
-        
-        struct ConnectionPool test_pool;
-        pool_init(&test_pool);
-        
-        int idx = pool_add(&test_pool, fd_pair[0]);
-        struct Connection *c = &test_pool.conns[idx];
-        
-        uint32_t huge_len = htonl(2000000000);
-        send(fd_pair[1], &huge_len, 4, 0);
-        
-        int step_result = pool_step(c);
-        if (step_result == -1) {
-            printf("PASS: connection pool rejected oversized frame header\n");
-        } else {
-            printf("FAIL: connection pool accepted oversized frame header (returned %d)\n", step_result);
-        }
-        close(fd_pair[1]);
-    }
-
-    return 0;
+        return 0;
     }
 
     *out_server = server;
@@ -143,7 +119,6 @@ static int make_tcp_pair(int *out_server, int *out_client)
 
     return 1;
 }
-
 static void test_partial_then_full(void)
 {
     int a = -1, b = -1;
