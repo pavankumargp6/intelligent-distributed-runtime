@@ -1,6 +1,8 @@
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
@@ -10,33 +12,40 @@
  * Send exactly 'length' bytes.
  *
  * TCP may send fewer bytes than requested,
- * so we keep calling send() until everything
+ * so keep calling send() until everything
  * has been transmitted.
+ *
+ * Retry if the system call is interrupted.
+ * MSG_NOSIGNAL prevents SIGPIPE on Linux
+ * if the peer has closed its connection.
  */
 int send_all(int socket_fd,
              const void *buffer,
              size_t length)
 {
     const char *data = buffer;
-
     size_t total_sent = 0;
 
     while (total_sent < length)
     {
-        ssize_t bytes_sent =
-            send(
-                socket_fd,
-                data + total_sent,
-                length - total_sent,
-                0
-            );
+        ssize_t bytes_sent = send(
+            socket_fd,
+            data + total_sent,
+            length - total_sent,
+            MSG_NOSIGNAL
+        );
+
+        if (bytes_sent < 0 && errno == EINTR)
+        {
+            continue;
+        }
 
         if (bytes_sent <= 0)
         {
             return 0;
         }
 
-        total_sent += bytes_sent;
+        total_sent += (size_t)bytes_sent;
     }
 
     return 1;
@@ -46,33 +55,38 @@ int send_all(int socket_fd,
  * Receive exactly 'length' bytes.
  *
  * TCP may return fewer bytes than requested,
- * so we keep calling recv() until the complete
- * message has been received.
+ * so keep calling recv() until the complete
+ * data has been received.
+ *
+ * Retry if the system call is interrupted.
  */
 int receive_all(int socket_fd,
                 void *buffer,
                 size_t length)
 {
     char *data = buffer;
-
     size_t total_received = 0;
 
     while (total_received < length)
     {
-        ssize_t bytes_received =
-            recv(
-                socket_fd,
-                data + total_received,
-                length - total_received,
-                0
-            );
+        ssize_t bytes_received = recv(
+            socket_fd,
+            data + total_received,
+            length - total_received,
+            0
+        );
+
+        if (bytes_received < 0 && errno == EINTR)
+        {
+            continue;
+        }
 
         if (bytes_received <= 0)
         {
             return 0;
         }
 
-        total_received += bytes_received;
+        total_received += (size_t)bytes_received;
     }
 
     return 1;
@@ -81,9 +95,9 @@ int receive_all(int socket_fd,
 /*
  * Send one framed message.
  *
- * Message format:
+ * Wire format:
  *
- * [4-byte length][payload]
+ * [4-byte network-order length][payload]
  */
 int send_message(int socket_fd,
                  const char *message)
@@ -93,28 +107,23 @@ int send_message(int socket_fd,
         return 0;
     }
 
-    size_t message_length =
-        strlen(message);
+    size_t message_length = strlen(message);
 
-    if (message_length >
-        NETWORK_MAX_MESSAGE_SIZE)
+    if (message_length > NETWORK_MAX_MESSAGE_SIZE)
     {
         return 0;
     }
 
     /*
-     * Convert the message length to
-     * a fixed 32-bit integer.
+     * Convert the message length to a fixed
+     * 32-bit integer.
      */
-    uint32_t length =
-        (uint32_t)message_length;
+    uint32_t length = (uint32_t)message_length;
 
     /*
-     * Convert the integer to network
-     * byte order.
+     * Convert to network byte order.
      */
-    uint32_t network_length =
-        htonl(length);
+    uint32_t network_length = htonl(length);
 
     /*
      * Send the 4-byte length header.
@@ -128,7 +137,7 @@ int send_message(int socket_fd,
     }
 
     /*
-     * Send the actual message payload.
+     * Send the message payload.
      */
     if (!send_all(
             socket_fd,
@@ -146,14 +155,15 @@ int send_message(int socket_fd,
  *
  * Reads:
  *
- * [4-byte length][payload]
+ * [4-byte network-order length][payload]
+ *
+ * Adds a terminating '\0' locally.
  */
 int receive_message(int socket_fd,
                     char *buffer,
                     size_t buffer_size)
 {
-    if (buffer == NULL ||
-        buffer_size == 0)
+    if (buffer == NULL || buffer_size == 0)
     {
         return 0;
     }
@@ -172,25 +182,21 @@ int receive_message(int socket_fd,
     }
 
     /*
-     * Convert the length from network
-     * byte order to the host's byte order.
+     * Convert the length to host byte order.
      */
-    uint32_t message_length =
-        ntohl(network_length);
+    uint32_t message_length = ntohl(network_length);
 
     /*
-     * Validate the received message size.
+     * Reject oversized messages.
      */
-    if (message_length >
-        NETWORK_MAX_MESSAGE_SIZE)
+    if (message_length > NETWORK_MAX_MESSAGE_SIZE)
     {
         return 0;
     }
 
     /*
-     * Make sure the destination buffer
-     * has enough room for the message
-     * plus the terminating '\0'.
+     * Ensure room for the payload and
+     * terminating '\0'.
      */
     if ((size_t)message_length >= buffer_size)
     {
@@ -203,14 +209,14 @@ int receive_message(int socket_fd,
     if (!receive_all(
             socket_fd,
             buffer,
-            message_length))
+            (size_t)message_length))
     {
         return 0;
     }
 
     /*
-     * Convert the received bytes into
-     * a normal C string.
+     * Terminate the received data as a
+     * C string.
      */
     buffer[message_length] = '\0';
 
