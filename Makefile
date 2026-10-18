@@ -259,6 +259,9 @@ test:
 	@echo ""
 	@echo "===== worker_reincarnation_test.sh ====="
 	bash tests/worker_reincarnation_test.sh
+	@echo ""
+	@echo "===== scheduler_fairness_test.sh ====="
+	bash tests/scheduler_fairness_test.sh
 	@echo "===== wal_meta_recovery_test.sh ====="
 	bash tests/wal_meta_recovery_test.sh
 	@echo ""
