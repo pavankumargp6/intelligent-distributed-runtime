@@ -49,18 +49,6 @@ Not yet implemented:
 - Authentication or authorization
 - Retry / recovery policies
 
-## Architecture
-
-    client  ──SUBMIT──►  coordinator  ──TASK_ASSIGN──►  worker agent
-            ◄──QUERY───  (queue,      ◄──TASK_RESULT──  (fork/exec)
-                         scheduler,
-                         registry,
-                         metrics)
-            ▲                                           ▲
-            │                                           │
-            └─ REGISTER / HEARTBEAT / TASK_REQUEST ──────┘
-
-Every arrow is a length-prefixed TCP message on port 5001.
 ## Performance & Benchmarks
 
 The IDR coordinator is built to handle high-concurrency task bursts efficiently. Below are the results from a benchmark run using 4 local workers processing a queue of 1,000 no-op tasks (`true` command).
@@ -244,48 +232,6 @@ If a test fails and leaves a coordinator holding port 5001:
 
     docs/
       PROTOCOL.md               canonical wire protocol specification
-## Repository layout
-
-    src/
-      runtime.c/h                 runtime core
-      task.h                      task struct and state enum
-      task_manager.c/h            FIFO wrapper
-      task_queue.c/h              bounded queue (capacity 64)
-      scheduler.c/h               worker selection, global and per-worker
-      worker_pool.c/h             worker collection
-      worker.c/h                  individual worker
-      worker_resources.c/h        CPU/memory accounting
-      process_info.c/h            /proc readers
-      cpu_monitor.c/h             CPU sampling
-      worker_registry.c/h         registration and liveness
-      worker_registration.c/h     REGISTER / HEARTBEAT wire format
-      worker_registration_client.c/h  worker-side registration
-      worker_task_client.c/h      worker-side TASK_REQUEST / TASK_RESULT
-      task_executor.c/h           local fork/execvp and waitpid
-      task_metrics.c/h            per-task timing
-      runtime_stats.c/h           runtime-wide counters
-      network_protocol.c/h        framing
-      wire_fields.c/h             length-prefixed field helpers
-      coordinator_tasks.c/h       in-flight table + completed ring
-      coordinator_handlers.c/h    SUBMIT / TASK_REQUEST / TASK_RESULT / QUERY
-      connection_pool.c/h         concurrent connection handling
-      runtime_server.c/h          poll loop, dispatch, housekeeping
-      runtime_server_main.c       coordinator entry point
-      worker_agent.c              worker entry point
-
-    tests/
-      client_submit.c             SUBMIT client
-      client_query.c              QUERY client
-      hung_client.c               partial-frame client stub
-      fake_coordinator.c          coordinator stub for worker tests
-      connection_pool_test.c      unit test for the connection pool
-      runtime_scheduling_test.c   scheduler regression
-      worker_remote_exec_test.sh
-      remote_exec_e2e_test.sh
-      fault_injection_test.sh
-      pull_model_test.sh
-      hung_client_test.sh
-
 ## Limitations
 
 These are real, verified, and not hidden behind optimistic
