@@ -104,7 +104,7 @@ ANALYZER_CLIENT_STATUS = $(ANALYZER_BUILD)/client_status
 
 all: $(COORDINATOR_BIN) $(WORKER_BIN) \
      $(CLIENT_SUB_BIN) $(CLIENT_QRY_BIN) $(CLIENT_STATUS_BIN) \
-     $(BUILD)/raw_submit
+     $(BUILD)/raw_submit $(BUILD)/client_metrics
 	@echo ""
 	@echo "Build complete:"
 	@echo "  $(COORDINATOR_BIN)"
@@ -262,6 +262,9 @@ test:
 	@echo ""
 	@echo "===== scheduler_fairness_test.sh ====="
 	bash tests/scheduler_fairness_test.sh
+	@echo ""
+	@echo "===== metrics_test.sh ====="
+	bash tests/metrics_test.sh
 	@echo "===== wal_meta_recovery_test.sh ====="
 	bash tests/wal_meta_recovery_test.sh
 	@echo ""
@@ -311,3 +314,6 @@ help:
 	@echo "  make help    this message"
 
 
+
+$(BUILD)/client_metrics: tests/client_metrics.c $(COMMON_SRCS)
+	$(CC) $(CFLAGS) tests/client_metrics.c $(COMMON_SRCS) -o $@

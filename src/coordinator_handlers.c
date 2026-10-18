@@ -1022,3 +1022,65 @@ int coordinator_reap_worker_tasks(struct Runtime *runtime,
 
     return reaped;
 }
+int coordinator_handle_metrics(struct Runtime *runtime,
+                               struct InFlightTable *table,
+                               struct Connection *conn)
+{
+    if (runtime == NULL || table == NULL || conn == NULL)
+    {
+        return 0;
+    }
+
+    int queue = 0;
+    if (runtime->task_manager != NULL)
+    {
+        queue = runtime->task_manager->queue.count;
+    }
+
+    int inflight = 0;
+    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    {
+        if (table->entries[i].in_use)
+        {
+            inflight++;
+        }
+    }
+
+    double avg_qw_ms = get_average_queue_wait(&runtime->stats) * 1000.0;
+    double avg_exec_ms = get_average_execution_time(&runtime->stats) * 1000.0;
+
+    char response[512];
+    int n = snprintf(response, sizeof(response),
+                     "METRICS_REPLY|queue=%d|inflight=%d|"
+                     "submitted=%d|completed=%d|failed=%d|timed_out=%d|"
+                     "avg_queue_wait_ms=%.2f|avg_exec_ms=%.2f",
+                     queue,
+                     inflight,
+                     runtime->stats.tasks_submitted,
+                     runtime->stats.tasks_completed,
+                     runtime->stats.tasks_failed,
+                     runtime->stats.tasks_timed_out,
+                     avg_qw_ms,
+                     avg_exec_ms);
+
+    if (n <= 0 || (size_t)n >= sizeof(response))
+    {
+        return 0;
+    }
+
+    pool_send_message(conn, response);
+
+    log_info("metrics_reported",
+             "METRICS queue=%d inflight=%d submitted=%d completed=%d "
+             "failed=%d timed_out=%d avg_qw_ms=%.2f avg_exec_ms=%.2f",
+             queue,
+             inflight,
+             runtime->stats.tasks_submitted,
+             runtime->stats.tasks_completed,
+             runtime->stats.tasks_failed,
+             runtime->stats.tasks_timed_out,
+             avg_qw_ms,
+             avg_exec_ms);
+
+    return 1;
+}

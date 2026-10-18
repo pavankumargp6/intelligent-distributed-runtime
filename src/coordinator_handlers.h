@@ -46,4 +46,9 @@ int coordinator_reap_worker_tasks(struct Runtime *runtime,
                                   struct InFlightTable *table,
                                   int worker_id);
 
+int coordinator_handle_metrics(struct Runtime *runtime,
+                               struct InFlightTable *table,
+                               struct Connection *conn);
+
+
 #endif

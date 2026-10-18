@@ -69,12 +69,13 @@ static int classify_message(const char *message,
         *is_worker_message = 1;
         return 1;
     }
-
     if (strncmp(message, "SUBMIT|", 7) == 0 ||
         strncmp(message, "QUERY|", 6) == 0 ||
+        strcmp(message, "METRICS") == 0 ||           /* <-- Add this */
         (strncmp(message, "STATUS", 6) == 0 &&
-         (message[6] == '\0' || message[6] == '|')))   
- {
+         (message[6] == '\0' || message[6] == '|')))
+
+    {
         *expected_dir = AUTH_DIR_CLIENT_TO_COORD;
         *expected_role = AUTH_ROLE_CLIENT;
         *is_worker_message = 0;
@@ -286,6 +287,11 @@ static int handle_worker_message(
     if (strcmp(dispatch_msg, "STATUS") == 0)
     {
         return coordinator_handle_status(
+            runtime, table, conn);
+    }
+    if (strcmp(dispatch_msg, "METRICS") == 0)
+    {
+        return coordinator_handle_metrics(
             runtime, table, conn);
     }
 
