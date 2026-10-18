@@ -813,6 +813,24 @@ int coordinator_reap_dead_worker_tasks(struct Runtime *runtime,
             continue;
         }
 
+        /*
+         * Durability fix (Milestone H): Write the failure to the
+         * WAL before updating in-memory state. Without this, a
+         * coordinator crash would cause the task to be resurrected
+         * from the WAL on restart, despite having already failed.
+         */
+        char wal_line[128];
+        int n = snprintf(wal_line, sizeof(wal_line),
+                         "RESULT|%d|%d|%d|%d",
+                         task_id,
+                         reported_worker,
+                         -1,
+                         (int)TASK_FAILED);
+        if (n > 0 && (size_t)n < sizeof(wal_line))
+        {
+            (void)wal_append(&runtime->wal, wal_line);
+        }
+
         coordinator_record_completed(table,
                                      task_id,
                                      reported_worker,
@@ -820,7 +838,6 @@ int coordinator_reap_dead_worker_tasks(struct Runtime *runtime,
                                      (int)TASK_FAILED);
 
         record_task_failed(&runtime->stats);
-
         log_info("in_flight_task_reaped",
                  "Reaped in-flight task %d: worker %d not live.",
                  task_id,
