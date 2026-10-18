@@ -3,8 +3,7 @@
 #include <string.h>
 #include "coordinator_tasks.h"
 #include "coordinator_handlers.h"
-#include "runtime.h"            <-- Add this line
-#include "network_protocol.h"
+#include "runtime.h"
 #include "wire_fields.h"
 #include "scheduler.h"
 #include "task_manager.h"

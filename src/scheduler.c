@@ -104,29 +104,42 @@ int schedule_next_task_for_worker(struct Scheduler *scheduler,
         }
     }
 
-    if (asking == NULL)
+    if (asking == NULL || !is_worker_live(scheduler->registry, worker_id))
     {
         return 0;
     }
 
-    if (!is_worker_live(scheduler->registry, worker_id))
+    struct TaskQueue *queue = &scheduler->manager->queue;
+
+    /* 
+     * Scan the queue for the first task that fits this worker.
+     * This prevents Head-of-Line (HOL) blocking.
+     */
+    for (int i = 0; i < queue->count; i++)
     {
-        return 0;
+        int actual_index = (queue->front + i) % TASK_QUEUE_CAPACITY;
+        struct Task *candidate = &queue->tasks[actual_index];
+
+        if (task_fits_worker(candidate, &asking->resources))
+        {
+            /*
+             * O(1) trick: Swap the fitting task with the front of the queue,
+             * then use the normal dequeue_task to pop it.
+             */
+            if (i != 0)
+            {
+                struct Task temp = queue->tasks[queue->front];
+                queue->tasks[queue->front] = *candidate;
+                *candidate = temp;
+            }
+
+            dequeue_task(queue, task);
+            task->assigned_worker_id = asking->id;
+            *selected_worker = asking;
+            return 1;
+        }
     }
 
-    if (!get_next_task(scheduler->manager, task))
-    {
-        return 0;
-    }
-
-    if (!task_fits_worker(task, &asking->resources))
-    {
-        submit_task(scheduler->manager, task);
-        return 0;
-    }
-
-    task->assigned_worker_id = asking->id;
-    *selected_worker = asking;
-
-    return 1;
+    /* No tasks in the queue fit this worker right now. */
+    return 0;
 }
