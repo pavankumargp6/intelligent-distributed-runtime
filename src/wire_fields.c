@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <errno.h> 
 #include "wire_fields.h"
 
 size_t wire_append_delimiter(char *buffer,
@@ -165,9 +165,10 @@ int wire_read_int(const char **cursor, long *out)
     const char *p = *cursor;
     char *endptr = NULL;
 
+    errno = 0;
     long value = strtol(p, &endptr, 10);
 
-    if (endptr == p)
+    if (endptr == p || errno == ERANGE)
     {
         return 0;
     }

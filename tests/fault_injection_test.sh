@@ -168,6 +168,14 @@ if ! grep -q "QUERY_RESULT|1|1|-1|3" "$QUERY_LOG"; then
     echo "===== Fault test: FAIL (query did not return TASK_FAILED) ====="
     exit 1
 fi
+echo "===== Verifying WAL durability ====="
+if ! grep -q "RESULT|1|1|-1|3" "$IDR_WAL_PATH"; then
+    echo "===== Fault test: FAIL (WAL does not contain failed task result) ====="
+    echo "WAL file: $IDR_WAL_PATH"
+    cat "$IDR_WAL_PATH"
+    exit 1
+fi
+echo "PASS: Failed task was durably written to WAL."
 
 if [ "$QUERY_RC" -ne 0 ]; then
     echo "===== Fault test: FAIL (query client exit $QUERY_RC) ====="
