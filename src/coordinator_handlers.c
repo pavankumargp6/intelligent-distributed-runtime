@@ -1,8 +1,9 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
-
+#include "coordinator_tasks.h"
 #include "coordinator_handlers.h"
+#include "runtime.h"            <-- Add this line
 #include "network_protocol.h"
 #include "wire_fields.h"
 #include "scheduler.h"
@@ -12,7 +13,6 @@
 #include "connection_pool.h"
 #include "log.h"
 #include "wal.h"
-
 static int parse_submit(const char *message,
                         struct Task *task)
 {
@@ -949,6 +949,74 @@ int coordinator_reap_unaccepted_tasks(struct Runtime *runtime,
                      worker_id,
                      DISPATCH_TIMEOUT_SECONDS);
         }
+
+        reaped++;
+    }
+
+    return reaped;
+}
+int coordinator_reap_worker_tasks(struct Runtime *runtime,
+                                  struct InFlightTable *table,
+                                  int worker_id)
+{
+    if (runtime == NULL || table == NULL || worker_id <= 0)
+    {
+        return 0;
+    }
+
+    int reaped = 0;
+
+    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    {
+        if (!table->entries[i].in_use)
+        {
+            continue;
+        }
+
+        if (table->entries[i].worker_id != worker_id)
+        {
+            continue;
+        }
+
+        int task_id = table->entries[i].task_id;
+        struct Task task;
+        int reported_worker = -1;
+
+        if (!coordinator_take_inflight(table,
+                                       task_id,
+                                       &task,
+                                       &reported_worker))
+        {
+            continue;
+        }
+
+        /*
+         * Durability fix: write to WAL before updating in-memory state.
+         */
+        char wal_line[128];
+        int n = snprintf(wal_line, sizeof(wal_line),
+                         "RESULT|%d|%d|%d|%d",
+                         task_id,
+                         reported_worker,
+                         -1,
+                         (int)TASK_FAILED);
+        if (n > 0 && (size_t)n < sizeof(wal_line))
+        {
+            (void)wal_append(&runtime->wal, wal_line);
+        }
+
+        coordinator_record_completed(table,
+                                     task_id,
+                                     reported_worker,
+                                     -1,
+                                     (int)TASK_FAILED);
+
+        record_task_failed(&runtime->stats);
+
+        log_warn("in_flight_task_reaped_incarnation",
+                 "Reaped in-flight task %d: worker %d re-registered.",
+                 task_id,
+                 reported_worker);
 
         reaped++;
     }

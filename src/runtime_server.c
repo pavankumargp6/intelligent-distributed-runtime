@@ -179,6 +179,21 @@ static int handle_worker_message(
                  worker.id,
                  worker.resources.total_cpu_percent,
                  worker.resources.total_memory_mb);
+        /* Milestone H.2: If this worker was already registered, it
+         * means it crashed and restarted. Any tasks it was running
+         * are lost and must be failed immediately. */
+        if (find_registered_worker(&runtime->registry, worker.id) != NULL)
+        {
+            int reaped = coordinator_reap_worker_tasks(runtime, table, worker.id);
+            if (reaped > 0)
+            {
+                log_warn("worker_reincarnated",
+                         "Worker %d re-registered; failed %d orphaned tasks.",
+                         worker.id, reaped);
+            }
+        }
+
+
 
         if (!runtime_register_worker(runtime, &worker))
         {
