@@ -214,6 +214,8 @@ $(ANALYZER_CLIENT_STATUS): $(CLIENT_STATUS_SRCS)
 	@mkdir -p $(ANALYZER_BUILD)
 	$(CC) $(ANALYZER_CFLAGS) $^ -o $@
 
+
+
 test:
 	@mkdir -p $(BUILD)
 	@echo "===== connection pool unit test ====="
@@ -222,6 +224,12 @@ test:
 	    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
 	    -o $(BUILD)/connection_pool_test
 	$(BUILD)/connection_pool_test
+	@echo ""
+	@echo "===== network protocol unit test ====="
+	$(CC) $(CFLAGS) src/network_protocol_test.c \
+	    src/network_protocol.c -pthread \
+	    -o $(BUILD)/network_protocol_test
+	$(BUILD)/network_protocol_test
 	@echo ""
 	@echo "===== log_test.sh ====="
 	bash tests/log_test.sh
@@ -253,7 +261,6 @@ test:
 	@echo "===== recovery_compact_test.sh ====="
 	bash tests/recovery_compact_test.sh
 	@echo ""
-	@echo ""
 	@echo "===== raw_submit_test.sh ====="
 	bash tests/raw_submit_test.sh
 	@echo ""
@@ -265,6 +272,7 @@ test:
 	@echo ""
 	@echo "===== metrics_test.sh ====="
 	bash tests/metrics_test.sh
+	@echo ""
 	@echo "===== wal_meta_recovery_test.sh ====="
 	bash tests/wal_meta_recovery_test.sh
 	@echo ""
