@@ -7,6 +7,7 @@
 # auth_config_invalid in its log.
 
 set -u
+unset IDR_INSECURE
 
 unset IDR_WORKER_SECRET
 unset IDR_CLIENT_SECRET

@@ -3,6 +3,7 @@
 # Wrapper that builds and runs the auth unit test.
 
 set -u
+unset IDR_INSECURE
 cd "$(dirname "$0")/.."
 
 BIN=/tmp/idr_auth_test

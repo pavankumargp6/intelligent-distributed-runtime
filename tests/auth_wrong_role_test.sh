@@ -9,6 +9,7 @@
 # close the connection without responding.
 
 set -u
+unset IDR_INSECURE
 
 export IDR_WORKER_SECRET="idr-test-worker-secret-do-not-use-in-production"
 export IDR_CLIENT_SECRET="idr-test-client-secret-do-not-use-in-production"

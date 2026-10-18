@@ -1,5 +1,22 @@
 # Intelligent Distributed Runtime (IDR)
 
+IDR is a fault-tolerant, distributed task execution engine written in C. It is designed to handle high-concurrency task bursts with strict durability guarantees, secure client/worker authentication, and a resource-aware scheduler.
+
+## Architecture
+
+The system follows a Coordinator-Worker architecture. The Coordinator manages state, handles scheduling, and writes to a Write-Ahead Log (WAL) for crash recovery. Workers pull tasks, report heartbeats, and manage process lifecycles.
+
+```mermaid
+graph TD
+    Client[Client] -->|SUBMIT / QUERY / METRICS| Coordinator
+    Coordinator -->|WAL Append / fsync| Disk[(Write-Ahead Log)]
+    Worker[Worker] -->|REGISTER / HEARTBEAT| Coordinator
+    Coordinator -->|TASK_ASSIGN| Worker
+    Worker -->|TASK_ACCEPT / TASK_RESULT| Coordinator
+
+
+# Intelligent Distributed Runtime (IDR)
+
 [![CI](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml)
 
 A C/POSIX runtime that distributes tasks from a coordinator to

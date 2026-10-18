@@ -12,6 +12,7 @@
 # bind is even called.
 
 set -u
+unset IDR_INSECURE
 
 export IDR_INSECURE=1
 export IDR_BIND_ADDR=0.0.0.0
