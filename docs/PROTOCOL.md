@@ -283,7 +283,7 @@ coordinator no longer knows about).
 
 ### 4.2 Client to coordinator
 
-**`SUBMIT|<len>:<cmd>|<argc>|<len>:<arg1>|...|[<idempotent>]`**
+**`SUBMIT|<len>:<cmd>|<argc>|<len>:<arg1>|...|[<idempotent>]|[<timeout_seconds>]`**
 
 `<cmd>` is the command name. `<argc>` is a decimal count; each
 argument follows as a length-prefixed field. The trailing
@@ -322,7 +322,7 @@ Response: `STATUS_REPLY|<counters>` — see section 5.5.
 
 **`NO_TASK`** — no work available for this worker right now.
 
-**`TASK_ASSIGN|<id>|<len>:<cmd>|<argc>|<len>:<arg1>|...`**
+**`TASK_ASSIGN|<id>|<len>:<cmd>|<argc>|<len>:<arg1>|...|<timeout_seconds>`**
 
 Same field layout as `SUBMIT` minus the idempotent flag. Sent in
 response to a `TASK_REQUEST`.
@@ -377,7 +377,7 @@ Length 22 counts every byte of `REGISTER|1|800.00|7710`.
 The client submits `echo hello world`:
 
 ```
-[29] SUBMIT|4:echo|2|5:hello|5:world
+[31] SUBMIT|4:echo|2|5:hello|5:world|0|0
 ```
 
 Decoded:
@@ -393,7 +393,7 @@ Decoded:
 The coordinator assigns task 1 to whichever worker requested it:
 
 ```
-[37] TASK_ASSIGN|1|4:echo|2|5:hello|5:world
+[39] TASK_ASSIGN|1|4:echo|2|5:hello|5:world|0
 ```
 
 Length 37 counts `TASK_ASSIGN|` (12) + `1` (1) + `|` (1) +

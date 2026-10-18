@@ -12,3 +12,10 @@ idr-wal.log
 .vscode/
 .idea/
 .DS_Store
+# Stray test binaries
+cpu_test
+digit_test
+proc_list
+process_manager
+process_monitor
+worker_agent

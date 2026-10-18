@@ -329,20 +329,13 @@ language.
   expose the coordinator to an untrusted network merely
   because authentication is present.
 
-## Roadmap
+## Limitations & Future Work
 
-- **Phase 6 — Observability.** Structured logging, latency metrics
-  (queue wait, dispatch latency, execution time, end-to-end), and
-  a `Makefile` or build script so the README stops asking readers
-  to paste multi-line gcc commands.
-- **Later.** Per-connection worker state so workers don't
-  re-register each poll cycle. Non-blocking writes with
-  per-connection send buffers. Worker-side task-runner crash
-  detection. A dispatch acknowledgement so at-least-once
-  semantics become possible. Client-facing task cancellation.
-  TLS.
+While IDR is highly robust, there are a few enterprise features that remain out of scope for this version:
+- **Worker-side executor crash without heartbeat loss:** If a worker's heartbeat continues but its forked task-runner child segfaults, the coordinator will not notice unless per-task execution timeouts are configured.
+- **Transport Encryption (TLS):** Authentication (HMAC-SHA256) is enforced on every message, but the wire protocol is currently plaintext. TLS is out of scope.
+- **Coordinator High Availability:** The coordinator is currently a single point of failure. A future iteration will implement Raft consensus for multi-node failover.
 
 ## License
 
-
-All rights reserved by the author.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
