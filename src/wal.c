@@ -136,13 +136,34 @@ int wal_foreach_line(const char *path,
     while (fgets(line, sizeof(line), file) != NULL)
     {
         size_t len = strlen(line);
+        int truncated = 0;
 
+        /* Detect oversized lines: no newline read and not EOF */
+        if (len > 0 && line[len - 1] != '\n')
+        {
+            if (!feof(file))
+            {
+                int c;
+                /* Discard the remainder of the oversized line */
+                while ((c = fgetc(file)) != EOF && c != '\n')
+                {
+                    /* discard */
+                }
+            }
+            /* Line was too long for buffer, or missing newline at EOF */
+            truncated = 1;
+        }
         while (len > 0 &&
                (line[len - 1] == '\n' || line[len - 1] == '\r'))
         {
             line[--len] = '\0';
         }
 
+        /* Skip empty lines or truncated fragments */
+        if (truncated || len == 0)
+        {
+            continue;
+        }
         if (len == 0)
         {
             continue;

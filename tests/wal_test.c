@@ -14,6 +14,7 @@
 
 static int passed = 0;
 static int failed = 0;
+static int collect_idx = 0;
 
 #define CHECK(cond, msg) do { \
     if (cond) { printf("PASS: %s\n", msg); passed++; } \
@@ -25,11 +26,11 @@ static char g_path[256];
 static int collect_cb(const char *line, void *user)
 {
     char (*buf)[256] = user;
-    static int idx = 0;
+    
 
-    strncpy(buf[idx], line, 255);
-    buf[idx][255] = '\0';
-    idx++;
+    strncpy(buf[collect_idx], line, 255);
+    buf[collect_idx][255] = '\0';
+    collect_idx++;
 
     return 1;
 }
@@ -73,6 +74,7 @@ static void test_roundtrip(void)
 
     static char collected[16][256];
     memset(collected, 0, sizeof(collected));
+    collect_idx = 0;
 
     int count = wal_foreach_line(g_path, collect_cb, collected);
 
@@ -143,6 +145,39 @@ static void test_stop_early(void)
     unlink(g_path);
 }
 
+
+static void test_corrupt_and_oversized(void)
+{
+    unlink(g_path);
+    FILE *f = fopen(g_path, "w");
+    if (!f) return;
+
+    /* Line 1: Valid */
+    fprintf(f, "VALID|1\n");
+
+    /* Line 2: Oversized (larger than WAL_LINE_MAX) without a newline, then valid */
+    for (int i = 0; i < 9000; i++) fprintf(f, "X");
+    fprintf(f, "\nVALID|2\n");
+
+    /* Line 3: Truncated at EOF (no newline) */
+    fprintf(f, "TRUNCATED|3");
+
+    fclose(f);
+
+    static char collected[16][256];
+    memset(collected, 0, sizeof(collected));
+    collect_idx = 0;
+
+    int count = wal_foreach_line(g_path, collect_cb, collected);
+
+    /* Should only parse the 2 valid lines and skip the oversized/truncated ones */
+    CHECK(count == 2, "foreach_line skips oversized and truncated lines");
+    CHECK(strcmp(collected[0], "VALID|1") == 0, "corrupt-test: line 0 is valid");
+    CHECK(strcmp(collected[1], "VALID|2") == 0, "corrupt-test: line 1 is valid");
+    
+    unlink(g_path);
+}
+
 int main(void)
 {
     snprintf(g_path, sizeof(g_path),
@@ -152,6 +187,7 @@ int main(void)
     test_missing_file();
     test_reject_newline();
     test_stop_early();
+    test_corrupt_and_oversized();
 
     unlink(g_path);
 
