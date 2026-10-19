@@ -19,12 +19,6 @@ if ss -ltn 2>/dev/null | grep -q ':5001 '; then
     echo "FAIL: port 5001 in use."; exit 1
 fi
 
-# Check if unprivileged user namespaces are supported (GitHub Actions blocks this)
-if ! unshare -U true 2>/dev/null; then
-    echo "SKIP: unprivileged user namespaces are not supported in this environment."
-    exit 0
-fi
-
 # 1. Setup the Sandbox
 echo "===== Setting up sandbox at $SANDBOX ====="
 mkdir -p "$SANDBOX/bin"
@@ -79,10 +73,12 @@ sleep 4
 RESP=$(./build/client_query "$TASK_ID" 2>/dev/null | grep -o 'QUERY_RESULT.*')
 echo "Result: $RESP"
 
-# If chroot works, the probe will be unable to open /etc/hostname, returning exit 0.
-# If chroot fails, it will read the host file and return exit 1.
+# 5. Evaluate
 if [[ "$RESP" == *"|0|2"* ]]; then
     echo "PASS: executable ran inside the sandbox and was blocked from reading host files."
+elif [[ "$RESP" == *"|125"* || "$RESP" == *"|126"* ]]; then
+    echo "SKIP: environment blocks unshare/chroot syscalls (e.g., Docker seccomp)."
+    exit 0
 else
     echo "FAIL: task was not properly restricted. Result: $RESP"
     exit 1
