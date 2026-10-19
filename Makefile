@@ -295,6 +295,10 @@ test:
 	@echo "===== fault_injection_test.sh ====="
 	bash tests/fault_injection_test.sh
 	@echo ""
+	@echo "===== namespace_isolation_test.sh ====="
+	bash tests/namespace_isolation_test.sh
+
+	@echo ""
 	@echo "===== wal_corruption_recovery_test.sh ====="
 	bash tests/wal_corruption_recovery_test.sh
 

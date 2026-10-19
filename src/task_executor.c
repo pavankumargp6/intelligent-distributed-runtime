@@ -1,7 +1,11 @@
+#define _GNU_SOURCE
+#include <sched.h>
+#include <sys/mount.h>
 #include <errno.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -117,20 +121,47 @@ int start_task(struct Task *task)
     {
         /*
          * Put the child in its own process group so the parent
-         * can kill the entire subtree on timeout. Without this, a
-         * task like "bash -c 'sleep 100 & wait'" would leave the
-         * background sleep running after the direct child dies.
-         *
-         * If setpgid fails we still exec: the timeout path will
-         * fall back to killing just the direct child.
+         * can kill the entire subtree on timeout.
          */
         (void)setpgid(0, 0);
+
+        /*
+         * Mini-Docker Sandbox (Phase 7)
+         * Only active if IDR_SANDBOX_DIR is set.
+         */
+        const char *sandbox = getenv("IDR_SANDBOX_DIR");
+        if (sandbox != NULL && sandbox[0] != '\0')
+        {
+            /* Isolate hostname and mounts */
+            if (unshare(CLONE_NEWUSER | CLONE_NEWUTS | CLONE_NEWNS) == 0)
+            {
+                sethostname("idr-sandbox", 11);
+                
+                /* Make mounts private so they don't affect the host */
+                mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
+                
+                /* Drop into the sandbox directory */
+                if (chroot(sandbox) == 0)
+                {
+                    chdir("/");
+                }
+                else
+                {
+                    perror("chroot failed");
+                    _exit(126);
+                }
+            }
+            else
+            {
+                perror("unshare failed");
+                _exit(125);
+            }
+        }
 
         execvp(task->command, argv);
         perror("execvp");
         _exit(127);
     }
-
     task->pid = pid;
     task->state = TASK_RUNNING;
 
