@@ -130,49 +130,102 @@ int start_task(struct Task *task)
          * Only active if IDR_SANDBOX_DIR is set.
          */
         const char *sandbox = getenv("IDR_SANDBOX_DIR");
+
         if (sandbox != NULL && sandbox[0] != '\0')
         {
-            /* Isolate hostname and mounts */
-            if (unshare(CLONE_NEWUSER | CLONE_NEWUTS | CLONE_NEWNS) == 0)
-            {
-                /* Map current user to root inside the namespace */
-                char map_path[64];
-                FILE *f;
-
-                f = fopen("/proc/self/setgroups", "w");
-                if (f) { fprintf(f, "deny"); fclose(f); }
-
-                snprintf(map_path, sizeof(map_path), "/proc/self/uid_map");
-                f = fopen(map_path, "w");
-                if (f) { fprintf(f, "0 %d 1", getuid()); fclose(f); }
-
-                snprintf(map_path, sizeof(map_path), "/proc/self/gid_map");
-                f = fopen(map_path, "w");
-                if (f) { fprintf(f, "0 %d 1", getgid()); fclose(f); }
-
-                sethostname("idr-sandbox", 11);
-                
-                /* Make mounts private so they don't affect the host */
-                mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
-                
-                /* Drop into the sandbox directory */
-                if (chroot(sandbox) == 0)
-                {
-                    chdir("/");
-                }
-                else
-                {
-                    perror("chroot failed");
-                    _exit(126);
-                }
-            }
-            else
+            if (unshare(CLONE_NEWUSER | CLONE_NEWUTS | CLONE_NEWNS) != 0)
             {
                 perror("unshare failed");
                 _exit(125);
             }
-        }
 
+            /* Disable setgroups before writing the GID map. */
+            FILE *f = fopen("/proc/self/setgroups", "w");
+            if (f != NULL)
+            {
+                int setgroups_write_result = fprintf(f, "deny");
+                int setgroups_close_result = fclose(f);
+                if (setgroups_write_result < 0 || setgroups_close_result != 0)
+                {
+                    perror("setgroups configuration failed");
+                    _exit(125);
+                }
+            }
+            else if (errno != ENOENT)
+            {
+                perror("opening /proc/self/setgroups failed");
+                _exit(125);
+            }
+
+            char map_path[64];
+
+            if (snprintf(map_path, sizeof(map_path),
+                         "/proc/self/uid_map") >= (int)sizeof(map_path))
+            {
+                _exit(125);
+            }
+
+            f = fopen(map_path, "w");
+            if (f == NULL)
+            {
+                perror("opening uid_map failed");
+                _exit(125);
+            }
+
+            int uid_map_write_result = fprintf(f, "0 %d 1", getuid());
+            int uid_map_close_result = fclose(f);
+            if (uid_map_write_result < 0 || uid_map_close_result != 0)
+            {
+                perror("writing uid_map failed");
+                _exit(125);
+            }
+
+            if (snprintf(map_path, sizeof(map_path),
+                         "/proc/self/gid_map") >= (int)sizeof(map_path))
+            {
+                _exit(125);
+            }
+
+            f = fopen(map_path, "w");
+            if (f == NULL)
+            {
+                perror("opening gid_map failed");
+                _exit(125);
+            }
+
+            int gid_map_write_result = fprintf(f, "0 %d 1", getgid());
+            int gid_map_close_result = fclose(f);
+            if (gid_map_write_result < 0 || gid_map_close_result != 0)
+            {
+                perror("writing gid_map failed");
+                _exit(125);
+            }
+
+            if (sethostname("idr-sandbox", 11) != 0)
+            {
+                perror("sethostname failed");
+                _exit(125);
+            }
+
+            /* Make mounts private so they don't affect the host. */
+            if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0)
+            {
+                perror("making mounts private failed");
+                _exit(125);
+            }
+
+            if (chroot(sandbox) != 0)
+            {
+                perror("chroot failed");
+                _exit(126);
+            }
+
+            if (chdir("/") != 0)
+            {
+                perror("chdir after chroot failed");
+                _exit(126);
+            }
+        }
         execvp(task->command, argv);
         perror("execvp");
         _exit(127);
