@@ -297,6 +297,10 @@ test:
 	@echo ""
 	@echo "===== namespace_isolation_test.sh ====="
 	bash tests/namespace_isolation_test.sh
+	@echo ""
+	@echo "===== sandbox_failure_test.sh ====="
+	bash tests/sandbox_failure_test.sh
+
 
 	@echo ""
 	@echo "===== wal_corruption_recovery_test.sh ====="

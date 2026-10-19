@@ -66,9 +66,10 @@ int wal_append(struct Wal *wal, const char *line)
     }
 
     /*
-     * Single write: line + '\n'. On a regular file this
-     * is atomic up to PIPE_BUF under POSIX, and up to much
-     * more on ext4/xfs for reasonable sizes.
+     * Write line + '\n' as a single write() call. While POSIX
+     * does not guarantee atomicity for regular file writes
+     * (unlike PIPE_BUF for pipes), this minimizes the window
+     * for partial writes on modern filesystems like ext4/xfs.
      */
     char buffer[WAL_LINE_MAX];
 
