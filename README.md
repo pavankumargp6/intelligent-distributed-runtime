@@ -40,6 +40,8 @@ graph TD
 
 ## Performance & Benchmarks
 
+**Known limitation:** The benchmark harness measures ~50 TCP connections per task due to the current connection-per-request model. Reducing this via persistent connections with proper outgoing queues is future work.
+
 The IDR coordinator is built to handle high-concurrency task bursts efficiently. Below are the results from a benchmark run using 4 local workers processing a queue of 1,000 no-op tasks.
 
 **Hardware:** WSL2, Ubuntu (Windows 11 host)  
