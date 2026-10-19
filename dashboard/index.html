@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IDR Runtime Dashboard</title>
+    <!-- Include Chart.js for beautiful data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg: #0B1120;
+            --surface: #1E293B;
+            --surface-hover: #334155;
+            --text-main: #F8FAFC;
+            --text-muted: #94A3B8;
+            --accent: #3B82F6;
+            --success: #10B981;
+            --danger: #EF4444;
+            --warning: #F59E0B;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.5rem 2rem;
+            background-color: var(--surface);
+            border-bottom: 1px solid #334155;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo span { color: var(--accent); }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--success);
+            background: rgba(16, 185, 129, 0.1);
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            transition: all 0.3s ease;
+        }
+
+        .status.disconnected {
+            color: var(--danger);
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        .status.disconnected .status-dot {
+            background-color: var(--danger);
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        main {
+            padding: 2rem;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+            flex-grow: 1;
+        }
+
+        /* KPI Grid */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .kpi-card {
+            background-color: var(--surface);
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .kpi-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+            border-color: var(--accent);
+        }
+
+        .kpi-title {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .kpi-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        /* Chart Section */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 900px) {
+            .charts-grid { grid-template-columns: 1fr; }
+        }
+
+        .chart-container {
+            background-color: var(--surface);
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            height: 350px;
+            position: relative;
+        }
+
+        .chart-title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: var(--text-main);
+        }
+
+        .canvas-wrapper {
+            position: relative;
+            flex-grow: 1;
+            min-height: 0;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent)"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            IDR <span>Runtime</span>
+        </div>
+        <div id="status" class="status">
+            <div class="status-dot"></div>
+            <span id="status-text">Connected</span>
+        </div>
+    </header>
+
+    <main>
+        <!-- KPI Section -->
+        <div class="kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-title">Submitted</div>
+                <div id="submitted" class="kpi-value" style="color: var(--accent);">-</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-title">Completed</div>
+                <div id="completed" class="kpi-value" style="color: var(--success);">-</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-title">Failed</div>
+                <div id="failed" class="kpi-value" style="color: var(--danger);">-</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-title">Timed Out</div>
+                <div id="timed_out" class="kpi-value" style="color: var(--warning);">-</div>
+            </div>
+        </div>
+
+        <!-- Chart Section -->
+        <div class="charts-grid">
+            <div class="chart-container">
+                <div class="chart-title">Real-Time Queue Throughput</div>
+                <div class="canvas-wrapper">
+                    <canvas id="lineChart"></canvas>
+                </div>
+            </div>
+            
+            <div class="chart-container">
+                <div class="chart-title">Task Status Distribution</div>
+                <div class="canvas-wrapper">
+                    <canvas id="doughnutChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const API_URL = 'http://127.0.0.1:8080/api/metrics';
+        let isConnected = true;
+
+        // --- Chart.js Setup ---
+        Chart.defaults.color = '#94A3B8';
+        Chart.defaults.font.family = "'Inter', sans-serif";
+
+        // 1. Line Chart (Queue vs In-Flight over time)
+        const ctxLine = document.getElementById('lineChart').getContext('2d');
+        const lineChart = new Chart(ctxLine, {
+            type: 'line',
+            data: {
+                labels: [], // Time labels
+                datasets: [
+                    {
+                        label: 'Queue Depth',
+                        data: [],
+                        borderColor: '#3B82F6', // accent
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        fill: true,
+                        pointRadius: 0
+                    },
+                    {
+                        label: 'In-Flight',
+                        data: [],
+                        borderColor: '#F59E0B', // warning
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        pointRadius: 0
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 0 },
+                plugins: { legend: { position: 'top', align: 'end' } },
+                scales: {
+                    x: { display: false }, // Hide x-axis labels for cleaner look
+                    y: { 
+                        beginAtZero: true,
+                        grid: { color: 'rgba(51, 65, 85, 0.5)' },
+                        ticks: { stepSize: 1 }
+                    }
+                }
+            }
+        });
+
+        // 2. Doughnut Chart (Status Distribution)
+        const ctxDoughnut = document.getElementById('doughnutChart').getContext('2d');
+        const doughnutChart = new Chart(ctxDoughnut, {
+            type: 'doughnut',
+            data: {
+                labels: ['Completed', 'Failed', 'Timed Out'],
+                datasets: [{
+                    data: [0, 0, 0],
+                    backgroundColor: ['#10B981', '#EF4444', '#F59E0B'],
+                    borderWidth: 0,
+                    hoverOffset: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '75%',
+                plugins: {
+                    legend: { position: 'bottom', labels: { padding: 20 } }
+                }
+            }
+        });
+
+        // --- Fetch Logic ---
+        async function fetchMetrics() {
+            try {
+                const response = await fetch(API_URL);
+                if (!response.ok) throw new Error('HTTP error');
+                const data = await response.json();
+
+                // 1. Update KPI Cards
+                document.getElementById('submitted').innerText = data.submitted;
+                document.getElementById('completed').innerText = data.completed;
+                document.getElementById('failed').innerText = data.failed;
+                document.getElementById('timed_out').innerText = data.timed_out;
+
+                // 2. Update Line Chart (Keep last 20 data points)
+                const now = new Date().toLocaleTimeString();
+                if (lineChart.data.labels.length > 20) {
+                    lineChart.data.labels.shift();
+                    lineChart.data.datasets[0].data.shift();
+                    lineChart.data.datasets[1].data.shift();
+                }
+                lineChart.data.labels.push(now);
+                lineChart.data.datasets[0].data.push(data.queue);
+                lineChart.data.datasets[1].data.push(data.inflight);
+                lineChart.update();
+
+                // 3. Update Doughnut Chart
+                doughnutChart.data.datasets[0].data = [
+                    data.completed,
+                    data.failed,
+                    data.timed_out
+                ];
+                doughnutChart.update();
+
+                // 4. Handle Connection Status
+                if (!isConnected) {
+                    isConnected = true;
+                    document.getElementById('status').classList.remove('disconnected');
+                    document.getElementById('status-text').innerText = 'Connected';
+                }
+            } catch (error) {
+                // Handle Disconnection
+                if (isConnected) {
+                    isConnected = false;
+                    document.getElementById('status').classList.add('disconnected');
+                    document.getElementById('status-text').innerText = 'Disconnected';
+                }
+            }
+        }
+
+        // Poll every 1 second
+        setInterval(fetchMetrics, 1000);
+        fetchMetrics(); // Initial fetch
+    </script>
+</body>
+</html>

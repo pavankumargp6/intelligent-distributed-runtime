@@ -62,7 +62,7 @@ gcc -Wall -Wextra \
     src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
     src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
-    src/log.c src/wal.c src/recovery.c src/connection_pool.c \
+    src/log.c src/wal.c src/recovery.c src/metrics_json.c src/connection_pool.c \
     -o "$COORD_BIN" || exit 1
 
 echo "===== Building silent worker ====="

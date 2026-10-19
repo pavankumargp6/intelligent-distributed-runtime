@@ -18,11 +18,12 @@
 #include "connection_pool.h"
 #include "recovery.h"
 #include "wal.h"
+#include "metrics_json.h"
 #include "auth.h"
 #include "auth_config.h"
 #include "log.h"
 
-#define MAX_POLLFDS (CONNECTION_POOL_CAPACITY + 1)
+#define MAX_POLLFDS (CONNECTION_POOL_CAPACITY + 2)
 #define DEFAULT_WAL_PATH "./idr-wal.log"
 #define DEFAULT_BIND_ADDR "127.0.0.1"
 
@@ -479,8 +480,36 @@ int start_runtime_server(
              bind_addr,
              port);
 
+
+    /*
+     * Setup a secondary socket for the HTTP metrics dashboard.
+     * We bind to 127.0.0.1:8080.
+     */
+    int metrics_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (metrics_socket >= 0)
+    {
+        int m_reuse = 1;
+        setsockopt(metrics_socket, SOL_SOCKET, SO_REUSEADDR, &m_reuse, sizeof(m_reuse));
+        struct sockaddr_in m_addr = {0};
+        m_addr.sin_family = AF_INET;
+        m_addr.sin_port = htons(8080);
+        m_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // 127.0.0.1 only
+        if (bind(metrics_socket, (struct sockaddr *)&m_addr, sizeof(m_addr)) < 0 || 
+            listen(metrics_socket, 10) < 0)
+        {
+            perror("metrics_socket");
+            close(metrics_socket);
+            metrics_socket = -1;
+        }
+        else
+        {
+            log_info("metrics_listening", "Metrics dashboard available at http://127.0.0.1:8080/api/metrics");
+        }
+    }
+
     struct pollfd pollfds[MAX_POLLFDS];
     const int poll_timeout_ms = 1000;
+
 
     while (1)
     {
@@ -488,9 +517,18 @@ int start_runtime_server(
         pollfds[0].events = POLLIN;
         pollfds[0].revents = 0;
 
-        int nfds = pool_build_pollfds(&pool, pollfds, MAX_POLLFDS);
+        int nfds = pool_build_pollfds(&pool, pollfds, MAX_POLLFDS - 1);
+        
+        int total_fds = nfds;
+        if (metrics_socket >= 0)
+        {
+            pollfds[nfds].fd = metrics_socket;
+            pollfds[nfds].events = POLLIN;
+            pollfds[nfds].revents = 0;
+            total_fds = nfds + 1;
+        }
 
-        int poll_result = poll(pollfds, nfds, poll_timeout_ms);
+        int poll_result = poll(pollfds, total_fds, poll_timeout_ms);
 
         if (poll_result < 0)
         {
@@ -531,6 +569,24 @@ int start_runtime_server(
                              "Connection pool full; rejecting.");
                     close(client_socket);
                 }
+            }
+        }
+
+        if (metrics_socket >= 0 && (pollfds[nfds].revents & POLLIN))
+        {
+            int metric_fd = accept(metrics_socket, NULL, NULL);
+            if (metric_fd >= 0)
+            {
+                char req[1024];
+                /* Simple blocking read is fine for a local dashboard */
+                recv(metric_fd, req, sizeof(req), 0);
+                
+                char resp[2048];
+                if (build_metrics_http_response(runtime, &in_flight, resp, sizeof(resp)))
+                {
+                    send(metric_fd, resp, strlen(resp), MSG_NOSIGNAL);
+                }
+                close(metric_fd);
             }
         }
 

@@ -156,7 +156,7 @@ gcc -Wall -Wextra -Isrc \
     src/process_info.c src/cpu_monitor.c src/task_executor.c src/task_metrics.c \
     src/runtime_stats.c src/network_protocol.c src/worker_registration.c \
     src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
-    src/log.c src/wal.c src/recovery.c src/connection_pool.c \
+    src/log.c src/wal.c src/recovery.c src/metrics_json.c src/connection_pool.c \
     src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$COORD_BIN" || exit 1
 

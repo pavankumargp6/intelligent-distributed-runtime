@@ -40,6 +40,16 @@ The IDR coordinator is built to handle high-concurrency task bursts efficiently.
 *   **Submission Throughput:** 3,618 tasks/sec
 *   **Completion Throughput:** 1,000 tasks/sec (wall-clock)
 
+
+## Live Observability Dashboard
+
+The runtime includes a built-in, real-time observability dashboard.
+1. Start the coordinator: `IDR_INSECURE=1 ./build/runtime_server`
+2. Serve the dashboard: `cd dashboard && python3 -m http.server 8000`
+3. Open `http://localhost:8000` in your browser.
+
+The coordinator exposes a read-only JSON endpoint at `http://127.0.0.1:8080/api/metrics`. The dashboard polls this endpoint every second to display live queue depth, active workers, and task completion metrics.
+
 ## Protocol
 
 Framing: `[4-byte network-order uint32 payload length][payload]`.

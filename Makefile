@@ -16,6 +16,7 @@ COORDINATOR_SRCS = \
     src/log.c \
     src/wal.c \
     src/recovery.c \
+	src/metrics_json.c \
     $(COMMON_SRCS) \
     src/runtime_server_main.c \
     src/runtime_server.c \
@@ -272,6 +273,9 @@ test:
 	@echo ""
 	@echo "===== metrics_test.sh ====="
 	bash tests/metrics_test.sh
+	@echo ""
+	@echo "===== metrics_http_test.sh ====="
+	bash tests/metrics_http_test.sh
 	@echo ""
 	@echo "===== wal_meta_recovery_test.sh ====="
 	bash tests/wal_meta_recovery_test.sh

@@ -63,7 +63,7 @@ gcc -Wall -Wextra \
     src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
     src/log.c \
     src/wal.c \
-    src/recovery.c \
+    src/recovery.c src/metrics_json.c \
     src/connection_pool.c \
     -o "$COORD_BIN" || exit 1
 
