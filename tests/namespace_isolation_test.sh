@@ -77,6 +77,13 @@ echo "Result: $RESP"
 if [[ "$RESP" == *"|0|2"* ]]; then
     echo "PASS: executable ran inside the sandbox and was blocked from reading host files."
 elif [[ "$RESP" == *"|125"* || "$RESP" == *"|126"* ]]; then
+    echo "===== Sandbox setup diagnostic ====="
+    echo "--- Worker log ---"
+    cat "/tmp/idr_w_ns_$$.log" 2>/dev/null || true
+    echo "--- Coordinator log ---"
+    cat "$COORD_LOG" 2>/dev/null || true
+    echo "===== End diagnostic ====="
+    echo "Inspect the errors above to identify the failing operation."
     echo "SKIP: environment blocks unshare/chroot syscalls (e.g., Docker seccomp)."
     exit 0
 else

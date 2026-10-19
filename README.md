@@ -17,6 +17,19 @@ graph TD
     Worker -->|"TASK_ACCEPT / TASK_RESULT"| Coordinator
 ```
 
+### Execution flow
+
+1. **Submit:** A client sends a task request to the coordinator.
+2. **Validate and queue:** The coordinator validates the message,
+   applies authentication in secure mode, and records accepted
+   tasks using its write-ahead log (WAL).
+3. **Schedule:** The scheduler assigns available work to registered
+   workers.
+4. **Execute:** A worker launches the command and reports the
+   result to the coordinator.
+5. **Observe:** Clients can query task results and runtime status;
+   the metrics endpoint supplies data to the dashboard.
+
 ## Core Features
 
 *   **Fault Tolerance:** Write-Ahead Logging (WAL) with crash recovery, WAL compaction, and worker reincarnation detection.
@@ -72,35 +85,125 @@ Every message on the wire is signed with HMAC-SHA256 by default. The signed form
 
 *Note: HMAC authenticates but does not encrypt. The wire is still plaintext. TLS is out of scope for this version.*
 
-## Building & Running
 
-Everything builds with `gcc -Wall -Wextra`. No external dependencies beyond `libc` and POSIX (`fork`, `poll`, `execv`, `signalh`).
+## Building and Running
+
+### Requirements
+
+- Linux (Ubuntu 22.04/24.04 or a compatible distribution)
+- GCC, Make, Git and iproute2 (`ss`)
+- Python 3 for the optional dashboard
+
+Install the dependencies on Ubuntu:
 
 ```bash
-make          # coordinator, worker, and clients -> build/
-make asan     # same, with AddressSanitizer + UBSan
-make test     # run the complete unit + integration test suite
-make clean    # remove build/
+sudo apt update
+sudo apt install -y build-essential git iproute2 python3
 ```
 
-**Three terminals to run:**
+### Clone and build
+
 ```bash
-# Terminal 1
-```bash
-# Terminal 2
-./build/worker_agent 1
+git clone https://github.com/pavankumargp6/intelligent-distributed-runtime.git
+cd intelligent-distributed-runtime
+make
 ```
+
+Run the complete test suite:
+
 ```bash
-# Terminal 3
-./build/client_submit echo hello world     # Response: SUBMIT_ACK|1
-./build/client_query 1                     # Response: QUERY_RESULT|1|1|0|2
+make test
 ```
+
+The build creates the coordinator, worker agent and client
+executables under `build/`.
+
+### Quick demo: local development mode
+
+This demo disables message authentication for local development.
+Use it only on the loopback interface; do not use insecure mode
+for network-accessible deployments.
+
+Open three terminals in the cloned repository.
+
+**Terminal 1 — start the coordinator**
+
+```bash
+rm -f /tmp/idr-demo-wal.log
+IDR_INSECURE=1 IDR_WAL_PATH=/tmp/idr-demo-wal.log ./build/runtime_server
+```
+
+**Terminal 2 — start a worker**
+
+```bash
+IDR_INSECURE=1 ./build/worker_agent 1
+```
+
+**Terminal 3 — submit and query a task**
+
+```bash
+out=$(IDR_INSECURE=1 ./build/client_submit echo hello world)
+printf '%s\n' "$out"
+
+task_id=$(printf '%s\n' "$out" |
+  sed -n 's/.*SUBMIT_ACK|\([0-9][0-9]*\).*/\1/p' |
+  tail -n 1)
+
+if [ -z "$task_id" ]; then
+  echo "Could not obtain task ID"
+  exit 1
+fi
+
+sleep 6
+IDR_INSECURE=1 ./build/client_query "$task_id"
+IDR_INSECURE=1 ./build/client_status
+```
+
+The query should report a completed task with exit code `0`.
+The task ID is extracted from the submission response rather
+than assumed to be `1`.
+
+### Optional dashboard
+
+In another terminal:
+
+```bash
+cd dashboard
+python3 -m http.server 8000
+```
+
+Open http://localhost:8000 in your browser. The dashboard
+uses the coordinator's metrics endpoint at
+`http://127.0.0.1:8080/api/metrics`.
+
+### Development checks
+
+```bash
+make asan
+make ubsan
+make analyzer
+make clean
+```
+
+These targets build instrumented or analysis binaries, except
+`make clean`, which removes the build directory. Building the
+sanitizer binaries alone does not mean the test suite was run
+under sanitizers.
 
 ## Limitations & Future Work
 
 *   **Coordinator High Availability:** The coordinator is currently a single point of failure. A future iteration will implement Raft consensus for multi-node failover.
 *   **Transport Encryption (TLS):** Authentication is enforced, but the wire protocol is currently plaintext.
-*   **Strict Sandboxing:** Tasks run as direct child processes. True container isolation via Linux Namespaces and cgroups is planned for a future version.
+
+* **Experimental namespace/chroot sandbox:** Setting
+  `IDR_SANDBOX_DIR` enables the current Linux namespace and
+  `chroot()` setup path. This is not a full container runtime or
+  a security boundary suitable for arbitrary hostile code.
+  Resource limits through cgroups, seccomp filtering, network
+  namespace isolation and a comprehensive filesystem and
+  capability policy are not yet provided. Environments that
+  block the required system calls may skip the isolation test;
+  a skipped test is not evidence of successful isolation.
 *   **Executor Crash Detection:** If a worker's heartbeat continues but its forked task child segfaults, the coordinator relies on the task's `timeout_seconds` to detect the hang. A worker-side signal is required for instantaneous detection.
 
 ## License

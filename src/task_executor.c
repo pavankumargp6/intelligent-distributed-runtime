@@ -133,6 +133,10 @@ int start_task(struct Task *task)
 
         if (sandbox != NULL && sandbox[0] != '\0')
         {
+            /* Capture IDs before entering the new user namespace. */
+            uid_t outer_uid = getuid();
+            gid_t outer_gid = getgid();
+
             if (unshare(CLONE_NEWUSER | CLONE_NEWUTS | CLONE_NEWNS) != 0)
             {
                 perror("unshare failed");
@@ -143,7 +147,7 @@ int start_task(struct Task *task)
             FILE *f = fopen("/proc/self/setgroups", "w");
             if (f != NULL)
             {
-                int setgroups_write_result = fprintf(f, "deny");
+                int setgroups_write_result = fprintf(f, "deny\n");
                 int setgroups_close_result = fclose(f);
                 if (setgroups_write_result < 0 || setgroups_close_result != 0)
                 {
@@ -172,7 +176,7 @@ int start_task(struct Task *task)
                 _exit(125);
             }
 
-            int uid_map_write_result = fprintf(f, "0 %d 1", getuid());
+            int uid_map_write_result = fprintf(f, "0 %u 1\n", (unsigned int)outer_uid);
             int uid_map_close_result = fclose(f);
             if (uid_map_write_result < 0 || uid_map_close_result != 0)
             {
@@ -193,7 +197,7 @@ int start_task(struct Task *task)
                 _exit(125);
             }
 
-            int gid_map_write_result = fprintf(f, "0 %d 1", getgid());
+            int gid_map_write_result = fprintf(f, "0 %u 1\n", (unsigned int)outer_gid);
             int gid_map_close_result = fclose(f);
             if (gid_map_write_result < 0 || gid_map_close_result != 0)
             {
