@@ -83,9 +83,15 @@ elif [[ "$RESP" == *"|125"* || "$RESP" == *"|126"* ]]; then
     echo "--- Coordinator log ---"
     cat "$COORD_LOG" 2>/dev/null || true
     echo "===== End diagnostic ====="
-    echo "Inspect the errors above to identify the failing operation."
-    echo "SKIP: environment blocks unshare/chroot syscalls (e.g., Docker seccomp)."
-    exit 0
+
+    if grep -Eq '(unshare failed|opening /proc/self/setgroups failed|setgroups configuration failed|opening uid_map failed|writing uid_map failed|opening gid_map failed|writing gid_map failed|sethostname failed|making mounts private failed|chroot failed): Operation not permitted' \
+        "/tmp/idr_w_ns_$$.log" "$COORD_LOG"; then
+        echo "SKIP: a sandbox operation was denied by the environment (EPERM)."
+        exit 0
+    else
+        echo "FAIL: sandbox setup failed without a recognized environment restriction."
+        exit 1
+    fi
 else
     echo "FAIL: task was not properly restricted. Result: $RESP"
     exit 1
