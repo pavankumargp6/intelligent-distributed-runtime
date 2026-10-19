@@ -68,7 +68,7 @@ Every message on the wire is signed with HMAC-SHA256 by default. The signed form
 `<original_message>|<timestamp>|<hex_hmac>`
 
 *   **Secure mode (default):** Requires `IDR_WORKER_SECRET` and `IDR_CLIENT_SECRET` (min 32 bytes). Every incoming message is verified, and outgoing responses are signed. Timestamps are checked with a 60-second replay window.
-*   **Insecure development mode:** Enabled by `IER_INSECURE=1`. Authentication is disabled, and the coordinator requires a loopback bind address.
+*   **Insecure development mode:** Enabled by `IDR_INSECURE=1`. Authentication is disabled, and the coordinator requires a loopback bind address.
 
 *Note: HMAC authenticates but does not encrypt. The wire is still plaintext. TLS is out of scope for this version.*
 

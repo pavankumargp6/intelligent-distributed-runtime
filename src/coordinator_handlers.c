@@ -556,14 +556,21 @@ int coordinator_handle_task_result(struct Runtime *runtime,
                          exit_status,
                          state);
 
-    if (n_wal > 0 && (size_t)n_wal < sizeof(wal_line))
+    if (n_wal <= 0 || (size_t)n_wal >= sizeof(wal_line))
     {
-        if (!wal_append(&runtime->wal, wal_line))
-        {
-            log_warn("wal_append_failed",
-                     "Could not append RESULT record for task %d.",
-                     task_id);
-        }
+        log_error("wal_line_too_long",
+                  "Could not format RESULT record for task %d.",
+                  task_id);
+        return 0;
+    }
+
+    if (!wal_append(&runtime->wal, wal_line))
+    {
+        log_error("wal_append_failed",
+                  "Could not append RESULT record for task %d. "
+                  "Refusing to ACK to maintain durability.",
+                  task_id);
+        return 0;
     }
 
     coordinator_record_completed(table,
