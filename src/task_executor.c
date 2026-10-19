@@ -135,6 +135,21 @@ int start_task(struct Task *task)
             /* Isolate hostname and mounts */
             if (unshare(CLONE_NEWUSER | CLONE_NEWUTS | CLONE_NEWNS) == 0)
             {
+                /* Map current user to root inside the namespace */
+                char map_path[64];
+                FILE *f;
+
+                f = fopen("/proc/self/setgroups", "w");
+                if (f) { fprintf(f, "deny"); fclose(f); }
+
+                snprintf(map_path, sizeof(map_path), "/proc/self/uid_map");
+                f = fopen(map_path, "w");
+                if (f) { fprintf(f, "0 %d 1", getuid()); fclose(f); }
+
+                snprintf(map_path, sizeof(map_path), "/proc/self/gid_map");
+                f = fopen(map_path, "w");
+                if (f) { fprintf(f, "0 %d 1", getgid()); fclose(f); }
+
                 sethostname("idr-sandbox", 11);
                 
                 /* Make mounts private so they don't affect the host */
