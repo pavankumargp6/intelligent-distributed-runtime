@@ -214,4 +214,3 @@ under sanitizers.
 This project is licensed under the MIT License. See the ``LICENSE` file for details.
 
 
-[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/pavankumargp6/badge.svg)](https://hub.xerj.org/contributors/pavankumargp6)
