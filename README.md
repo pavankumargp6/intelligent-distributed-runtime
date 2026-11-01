@@ -1,6 +1,7 @@
 # Intelligent Distributed Runtime (IDR)
 
 [![CI](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml)
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/pavankumargp6/badge.svg)](https://hub.xerj.org/contributors/pavankumargp6)
 
 IDR is a fault-tolerant, distributed task execution engine written in C. Built with Linux system programming primitives (sockets, `fork / execvp`, `poll`, signals, and a length-prefixed TCP protocol), it is designed to handle high-concurrency task bursts with strict durability guarantees, secure client/worker authentication, and a resource-aware scheduler.
 
