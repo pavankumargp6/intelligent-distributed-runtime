@@ -179,6 +179,7 @@ Open http://localhost:8000 in your browser. The dashboard
 uses the coordinator's metrics endpoint at
 `http://127.0.0.1:8080/api/metrics`.
 
+
 ### Development checks
 
 ```bash
@@ -188,10 +189,12 @@ make analyzer
 make clean
 ```
 
+
 These targets build instrumented or analysis binaries, except
 `make clean`, which removes the build directory. Building the
 sanitizer binaries alone does not mean the test suite was run
 under sanitizers.
+
 
 ## Limitations & Future Work
 
@@ -208,6 +211,7 @@ under sanitizers.
   block the required system calls may skip the isolation test;
   a skipped test is not evidence of successful isolation.
 *   **Executor Crash Detection:** If a worker's heartbeat continues but its forked task child segfaults, the coordinator relies on the task's `timeout_seconds` to detect the hang. A worker-side signal is required for instantaneous detection.
+
 
 ## License
 
