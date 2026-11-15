@@ -3,7 +3,22 @@
 [![CI](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/pavankumargp6/badge.svg)](https://hub.xerj.org/contributors/pavankumargp6)
 
-IDR is a fault-tolerant, distributed task execution engine written in C. Built with Linux system programming primitives (sockets, `fork / execvp`, `poll`, signals, and a length-prefixed TCP protocol), it is designed to handle high-concurrency task bursts with strict durability guarantees, secure client/worker authentication, and a resource-aware scheduler.
+> **Project status: pre-1.0, unreleased.**
+>
+> This code is a working systems demonstration of durable task
+> submission, process-level execution, scheduling, and crash recovery. It
+> is **not** production-ready. Known limits include a 4,096-task WAL
+> recovery cliff, replay that can re-run non-idempotent tasks, fixed
+> demo-scale capacities, plaintext transport, and a single coordinator.
+> See [Status and limitations](#status-and-limitations) and
+> [`docs/ROADMAP.md`](docs/ROADMAP.md) for the path to 1.0.
+
+IDR is a distributed task execution engine written in C for Linux. It
+uses sockets, `fork / execvp`, `poll`, signals, and a length-prefixed TCP
+protocol. A single coordinator durably records accepted tasks in a
+write-ahead log (WAL) and dispatches them to worker agents that pull
+work. HMAC-SHA256 authenticates clients and workers, and a small JSON
+endpoint feeds an optional dashboard.
 
 ## Architecture
 
@@ -33,28 +48,68 @@ graph TD
 
 ## Core Features
 
-*   **Fault Tolerance:** Write-Ahead Logging (WAL) with crash recovery, WAL compaction, and worker reincarnation detection.
-*   **Secure Networking:** TCP sockets secured with HMAC-SHA256 authentication, role-specific secrets, and replay protection.
-*   **Resource-Aware Scheduling:** O(q) scan-and-swap scheduling that prevents Head-of-Line (HOL) blocking and distributes tasks fairly across workers.
-*   **Process Isolation:** Tasks are executed in separate process groups (`setpgid`). Timeouts and failures use `kill(-pid)` to ensure descendant processes are terminated, leaving no orphans.
-*   **Observability:** Real-time metrics client (`client_metrics`) and `STATUS` replies exposing throughput, latency, and active worker counts.
+*   **Crash recovery (with a known ceiling):** Write-Ahead Logging (WAL)
+    with `fsync` before acknowledgement, startup replay, WAL compaction,
+    and worker reincarnation detection. Compaction rewrites the file but
+    keeps every record, and recovery is capped at 4,096 lifetime tasks.
+    See [Status and limitations](#status-and-limitations).
+*   **Authenticated networking:** TCP sockets with HMAC-SHA256
+    authentication, role-specific secrets, timestamp checks, and replay
+    protection. Messages are authenticated but not encrypted.
+*   **Capacity-aware scheduling:** O(q) scan-and-swap scheduling that
+    skips tasks a worker cannot fit, avoiding Head-of-Line (HOL)
+    blocking. Availability is currently a static value from
+    registration, not a live load measurement.
+*   **Process isolation:** Tasks run in their own process group
+    (`setpgid`). Timeouts and failures use `kill(-pid)` to terminate
+    descendant processes. An experimental namespace/`chroot` sandbox is
+    available but is not a security boundary.
+*   **Observability:** A JSON metrics endpoint, `client_metrics`, and
+    `STATUS` replies exposing queue depth, task counters, and active
+    worker counts.
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Wire framing, field encoding, authentication, message catalog, state machine |
+| [`docs/SEMANTICS.md`](docs/SEMANTICS.md) | Task lifecycle, acknowledgement contract, timeout and crash behavior, delivery guarantees |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Components, task flow, durability, scheduling, failure table, limits |
+| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | Assets, trust boundaries, adversaries, current gaps, mitigations |
+| [`docs/SLO.md`](docs/SLO.md) | Proposed v1.0 SLIs, SLOs, error budget, measurement plan |
+| [`docs/BENCHMARK.md`](docs/BENCHMARK.md) | Benchmark methodology, raw runs, and caveats |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phases 0-7, exit criteria, and the two 10/10 finish lines |
+| [`docs/RELEASES.md`](docs/RELEASES.md) | Versioning, compatibility, deprecation, release checklist |
+| [`docs/adr/`](docs/adr/) | Architecture decision records for durability, semantics, and identity |
+
+The documents separate **current v0.x behavior** from **v1.0 target
+behavior**. If code and documentation disagree, that is a bug.
 
 ## Performance & Benchmarks
 
-**Known limitation:** The benchmark harness measures ~50 TCP connections per task due to the current connection-per-request model. Reducing this via persistent connections with proper outgoing queues is future work.
+**Known limitation:** the benchmark harness counts roughly 50-90 TCP
+connections per task because every request and response uses a new
+connection. Worker polling dominates the churn. Persistent connections
+with proper outgoing queues are future work (Phase 3).
 
-The IDR coordinator is built to handle high-concurrency task bursts efficiently. Below are the results from a benchmark run using 4 local workers processing a queue of 1,000 no-op tasks.
+The table below is the canonical current result: 4 client processes, 4
+local workers, 1,000 `/bin/true` tasks, default worker poll interval.
 
 **Hardware:** WSL2, Ubuntu (Windows 11 host)  
-**Workload:** 1,000 tasks / 4 workers
+**Workload:** 1,000 no-op tasks / 4 clients / 4 workers
 
 | Metric | p50 (Median) | p95 (Tail) |
 | :--- | :--- | :--- |
-| **End-to-End Latency** | 15 ms | 29 ms |
-| **Queue Wait Time** | 4 ms | 17 ms |
+| **End-to-end latency** | 17 ms | 19 ms |
+| **Queue wait time** | 15 ms | 17 ms |
 
-*   **Submission Throughput:** 3,618 tasks/sec
-*   **Completion Throughput:** 1,000 tasks/sec (wall-clock)
+The run used about 53,500 connections. Submission and completion rates
+are **not** reported as throughput figures: the wall-clock timer has
+one-second resolution and the batch finishes in under two seconds, so
+the raw rates are quantized. See
+[`docs/BENCHMARK.md`](docs/BENCHMARK.md) for the full runs, the
+`sleep 1` workload, the poll-interval sweep, and the methodology
+caveats.
 
 
 ## Live Observability Dashboard
@@ -69,12 +124,21 @@ The coordinator exposes a read-only JSON endpoint at `http://127.0.0.1:8080/api/
 ## Protocol
 
 Framing: `[4-byte network-order uint32 payload length][payload]`.
-This section is a summary. The canonical reference is in `docs/PROTOCOL.md`. Payloads are newline-free ASCII. Variable-length string fields are length-prefixed as `<len>:<bytes>`.
+This section is a summary. The canonical reference is in
+`docs/PROTOCOL.md`. Payloads are ASCII text; a length-prefixed field may
+contain any byte, including `|` and newlines. Variable-length string
+fields are encoded as `<len>:<bytes>`, where `<len>` is the byte count.
 
-*   **Submit a task:** `SUBMIT|<command_len>:<command>||argc||...args...|<idempotent>|<timeout_sec>`
-*   **Task Assignment:** `TASK_ASSIGN||task_id||<command>|<argc>||...args...|<timeout_sec>`
-*   **Result:** `TASK_RESULT|<task_id>||worker_id>||exit_code|<state>`
-*   **State Codes:** `0=CREATED, 1=RUNNING, 2=COMPLETED, 3=FAILED, 4=TIMED_OUT``
+*   **Submit a task:** `SUBMIT|<len>:<cmd>|<argc>|<len>:<arg1>|...|<idempotent>|<timeout_seconds>`
+*   **Task assignment:** `TASK_ASSIGN|<task_id>|<len>:<cmd>|<argc>|<len>:<arg1>|...|<timeout_seconds>`
+*   **Task acceptance:** `TASK_ACCEPT|<task_id>`
+*   **Result:** `TASK_RESULT|<task_id>|<worker_id>|<exit_status>|<state>`
+*   **Query:** `QUERY|<task_id>`, answered with `QUERY_RESULT`, `QUERY_PENDING`, or `QUERY_UNKNOWN`
+*   **State codes:** `0=CREATED, 1=RUNNING, 2=COMPLETED, 3=FAILED, 4=TIMED_OUT`
+
+`<len>` is the byte count of the field that follows, for example `4:echo`.
+The `idempotent` and `timeout_seconds` trailer fields are optional and
+default to `0`.
 
 **Example:** `SUBMIT|4:echo|2|5:hello|5:world|0|0`
 
@@ -196,25 +260,137 @@ sanitizer binaries alone does not mean the test suite was run
 under sanitizers.
 
 
-## Limitations & Future Work
+## Status and limitations
 
-*   **Coordinator High Availability:** The coordinator is currently a single point of failure. A future iteration will implement Raft consensus for multi-node failover.
-*   **Transport Encryption (TLS):** Authentication is enforced, but the wire protocol is currently plaintext.
+### Durability
 
-* **Experimental namespace/chroot sandbox:** Setting
-  `IDR_SANDBOX_DIR` enables the current Linux namespace and
-  `chroot()` setup path. This is not a full container runtime or
-  a security boundary suitable for arbitrary hostile code.
-  Resource limits through cgroups, seccomp filtering, network
-  namespace isolation and a comprehensive filesystem and
-  capability policy are not yet provided. Environments that
-  block the required system calls may skip the isolation test;
-  a skipped test is not evidence of successful isolation.
-*   **Executor Crash Detection:** If a worker's heartbeat continues but its forked task child segfaults, the coordinator relies on the task's `timeout_seconds` to detect the hang. A worker-side signal is required for instantaneous detection.
-[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/pavankumargp6/badge.svg)](https://hub.xerj.org/contributors/pavankumargp6)
+*   **Lifetime task ceiling.** Compaction keeps every `SUBMIT` and
+    `RESULT` record, and both compaction and replay are capped at
+    `RECOVERY_MAX_TASKS` (4,096 unique tasks). After 4,096 lifetime
+    tasks, startup fails with `wal_compact_index_full`,
+    `wal_recovery_overflow`, and `wal_replay_failed`. Removing the WAL
+    is currently the only way to restart.
+*   **No on-disk format versioning or checksums.** The WAL is
+    newline-delimited text with no magic value, format version, or
+    per-record checksum. A torn record at EOF is skipped with a
+    warning rather than distinguished from mid-file corruption.
+*   **Bounded retention.** Only the last 64 terminal results are kept in
+    memory. Older results return `QUERY_UNKNOWN` even though the WAL
+    still contains them. Queued tasks also return `QUERY_UNKNOWN`
+    because they are neither in flight nor completed.
+*   **Recovery queue is 64.** After a crash, only the first 64 unfinished
+    tasks can be requeued in memory. The rest remain in the WAL and wait
+    for a later restart.
+*   **A failed result append loses the result.** The coordinator removes a
+    task from in-flight before appending its `RESULT` record. If that
+    append fails, no ACK is sent, the worker does not retry, and the task
+    is neither in flight nor completed until a restart treats it as
+    unfinished.
+*   **Acknowledgement is not exactly-once.** `SUBMIT_ACK` means the
+    `SUBMIT` record was fsynced and the task was queued. It does not
+    mean the task will run exactly once. A client that loses the ACK
+    and retries can create a second task.
+
+The design for the replacement is in
+[`docs/adr/0001-snapshot-and-wal-segmentation.md`](docs/adr/0001-snapshot-and-wal-segmentation.md).
+
+### Delivery semantics
+
+*   The `idempotent` flag is honored on dispatch timeout but **not**
+    during crash recovery or worker-loss reaping. Recovery tries to
+    requeue every task without a recorded result, up to the 64-entry
+    queue, including non-idempotent tasks.
+*   There is no `UNKNOWN` state. A task whose outcome cannot be
+    determined is reported as `FAILED`, which hides the possibility that
+    it ran.
+*   There is no `DISPATCH` or `ACCEPT` record in the WAL, so recovery
+    cannot tell "assigned but never started" from "started, result
+    lost."
+
+The policy for v1.0 is in
+[`docs/adr/0002-delivery-semantics.md`](docs/adr/0002-delivery-semantics.md);
+the current behavior is catalogued in
+[`docs/SEMANTICS.md`](docs/SEMANTICS.md).
+
+### Scale
+
+Queue depth, in-flight tasks, completed results, the worker pool, the
+worker registry, and the connection pool are fixed-size arrays. The
+current values are 64, 64, 64, 16, 32, and 64 respectively. Worker
+availability is reported as its total capacity and is never decremented
+while tasks run, so scheduling is capacity filtering rather than live
+load balancing.
+
+### Security
+
+*   Transport is plaintext. HMAC authenticates messages but does not
+    encrypt them.
+*   All clients share `IDR_CLIENT_SECRET` and all workers share
+    `IDR_WORKER_SECRET`. There is no per-worker identity.
+*   `TASK_ACCEPT` carries no worker ID, and `TASK_RESULT` is not checked
+    against the assigned worker. Any holder of the worker secret can
+    accept or complete any in-flight task.
+*   The replay cache is global and fails closed when full, so one
+    identity can deny service to valid peers at high message rates.
+*   Setting `IDR_SANDBOX_DIR` enables user, UTS, and mount namespaces
+    plus `chroot()`. There is no seccomp, cgroup, network namespace, or
+    capability policy. This is **not** a security boundary for hostile
+    code. Environments that block the required system calls may skip the
+    isolation test; a skipped test is not evidence of isolation.
+*   There is no `SECURITY.md` or formal disclosure process yet. See
+    [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
+
+### Availability and operations
+
+*   The coordinator is a single process and a single point of failure.
+    Raft is a Phase 6 item, not an implemented feature.
+*   Clients, worker agents, and tests hard-code `127.0.0.1:5001`.
+    `IDR_BIND_ADDR` changes only the coordinator's listening address, so
+    remote workers cannot connect without rebuilding.
+*   The metrics listener performs a blocking `recv()` after `accept()`,
+    so a local client that connects and sends nothing can stall the
+    coordinator event loop.
+*   The worker parent installs `SIGCHLD` with `SIG_IGN` and never waits
+    for a task child. There is no child cap; concurrency is bounded only
+    by the coordinator's 64-entry in-flight table.
+*   If a worker heartbeats normally but its task child hangs, only the
+    task's `timeout_seconds` stops it. A task with timeout `0` can run
+    indefinitely.
+*   If the worker fails to start or wait for a task after sending
+    `TASK_ACCEPT`, the runner exits without reporting a result. The task
+    stays in flight for as long as the worker keeps heartbeating,
+    because the dispatch timeout no longer applies.
+
+### Benchmark caveats
+
+The table above comes from a WSL2 host with 4 client processes and 4
+local workers. It is a single short batch, not a sustained-load
+experiment, and the harness's one-second timer is too coarse for
+throughput claims on a run this size. Treat it as a baseline, not a
+guarantee. Phase 3 replaces the harness with nanosecond timers,
+multiple measured runs, and percentile reporting. See
+[`docs/BENCHMARK.md`](docs/BENCHMARK.md).
+
+## Roadmap
+
+Phase 0 is the documentation and contract baseline; implementation work
+starts at Phase 1. The phases and exit criteria are in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+| Phase | Focus |
+|---|---|
+| 0 | Contract, architecture, threat model, release policy |
+| 1 | WAL 2.0: snapshots, segments, checksums, recovery policy |
+| 2 | Live scheduling, worker lifecycle, per-worker identity and epochs |
+| 3 | Persistent connections, scale, reproducible benchmarks |
+| 4 | TLS, quotas, sandbox, parser fuzzing |
+| 5 | Prometheus, config, CLI, packaging, runbooks |
+| 6 | Raft high availability and chaos testing |
+| 7 | Evidence, releases, community |
 
 ## License
 
-This project is licensed under the MIT License. See the ``LICENSE` file for details.
+This project is licensed under the MIT License. See the
+[`LICENSE`](LICENSE) file for details.
 
 
