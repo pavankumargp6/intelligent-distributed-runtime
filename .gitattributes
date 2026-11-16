@@ -1,0 +1,17 @@
+# Normalize all text files to LF in the repository so that
+# shell tests, Makefiles, and expected-output fixtures behave
+# identically on Linux, macOS, and Windows checkouts.
+* text=auto eol=lf
+
+# Explicitly mark shell scripts and build files as LF-only.
+*.sh   text eol=lf
+*.c    text eol=lf
+*.h    text eol=lf
+*.md   text eol=lf
+Makefile text eol=lf
+
+# Binary fixtures must never be converted.
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.pdf  binary
