@@ -1,7 +1,7 @@
 # IDR Roadmap to 1.0
 
-Status: Phase 0 in progress
-Last updated: 2026-11-15
+Status: Phase 0 complete; Phase 1 next
+Last updated: 2026-11-16
 
 This document is the canonical project roadmap. It records what "10/10"
 means for IDR, the order in which the remaining work will be done, and
@@ -58,10 +58,11 @@ not fix a broken local write-ahead log.
 
 ## Phase 0 - Contract and baseline
 
-Status: in progress.
+Status: complete. Tagged `phase-0-baseline`.
 
-The goal is to make the current behavior and the intended behavior
-unambiguous before changing durability or scheduling.
+The goal was to make the current behavior and the intended behavior
+unambiguous before changing durability or scheduling. That baseline is
+now fixed, and Phase 1 starts from it.
 
 - [x] Define the 10/10 rubric and finish lines (`docs/ROADMAP.md`)
 - [x] Document task lifecycle and delivery guarantees (`docs/SEMANTICS.md`)
@@ -74,8 +75,8 @@ unambiguous before changing durability or scheduling.
   - [x] `docs/adr/0002-delivery-semantics.md`
   - [x] `docs/adr/0003-worker-identity-and-fencing.md`
 - [x] Link the documents from the README
-- [ ] Create GitHub issues for Phase 1 work
-- [ ] Tag the Phase 0 documentation baseline
+- [x] Create GitHub issues for Phase 1 work (#1-#8)
+- [x] Tag the Phase 0 documentation baseline (`phase-0-baseline`)
 
 Exit criteria: a new contributor can answer "what happens if the
 coordinator dies mid-task?" and "what does SUBMIT_ACK guarantee?" from
@@ -83,7 +84,10 @@ the documentation alone.
 
 ## Phase 1 - WAL 2.0
 
-Status: planned.
+Status: planned. Tracking issues: #1 (snapshots/segments), #2 (crash
+harness), #3 (retention/query), #4 (1M recovery test), #5 (corruption
+tests), #6 (disk readiness), #7 (DISPATCH/ACCEPT), #8 (format versioning
+and checksums).
 
 Context: `src/recovery.c` keeps every `SUBMIT` and `RESULT` line during
 compaction, while both compaction and replay are capped at 4,096 unique
