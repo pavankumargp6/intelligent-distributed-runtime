@@ -5,6 +5,10 @@ build/
 
 # Runtime Files
 idr-wal.log
+idr-wal.log.legacy
+idr-wal.log.manifest
+idr-wal.log.seg.*
+idr-wal.log.snap.*
 *.log
 *.csv
 

@@ -79,3 +79,41 @@ int is_task_queue_full(struct TaskQueue *queue)
 
     return queue->count == TASK_QUEUE_CAPACITY;
 }
+
+int task_queue_peek(const struct TaskQueue *queue,
+                    int index,
+                    struct Task *task)
+{
+    if (queue == NULL || task == NULL ||
+        index < 0 || index >= queue->count)
+    {
+        return 0;
+    }
+
+    int position = (queue->front + index) % TASK_QUEUE_CAPACITY;
+
+    *task = queue->tasks[position];
+
+    return 1;
+}
+
+int task_queue_contains(const struct TaskQueue *queue,
+                        int task_id)
+{
+    if (queue == NULL)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < queue->count; i++)
+    {
+        int position = (queue->front + i) % TASK_QUEUE_CAPACITY;
+
+        if (queue->tasks[position].id == task_id)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}

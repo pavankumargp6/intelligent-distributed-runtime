@@ -11,6 +11,7 @@ void initialize_runtime_stats(struct RuntimeStats *stats)
     stats->tasks_completed = 0;
     stats->tasks_failed = 0;
     stats->tasks_timed_out = 0;
+    stats->tasks_unknown = 0;
 
     stats->total_queue_wait_seconds = 0.0;
     stats->total_execution_seconds = 0.0;
@@ -63,6 +64,16 @@ void record_task_timed_out(struct RuntimeStats *stats)
     }
 
     stats->tasks_timed_out++;
+}
+
+void record_task_unknown(struct RuntimeStats *stats)
+{
+    if (stats == 0)
+    {
+        return;
+    }
+
+    stats->tasks_unknown++;
 }
 
 double get_average_queue_wait(

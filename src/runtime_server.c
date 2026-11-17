@@ -338,29 +338,22 @@ int start_runtime_server(
 
     runtime->wal.fd = -1;
 
-    if (!recovery_compact_wal(wal_path))
+    /*
+     * Load the newest valid snapshot, replay the WAL segments
+     * after it, import a legacy single-file log once, apply the
+     * recovery policy, and open the WAL for append.
+     *
+     * Failure here is fatal: starting with partial state would
+     * silently lose accepted work.
+     */
+    if (!recovery_start(runtime, &in_flight, wal_path))
     {
-        log_warn("wal_compact_skipped",
-                 "Could not compact WAL at %s; continuing with original",
-                 wal_path);
-    }
-
-    if (!wal_open_for_append(&runtime->wal, wal_path))
-    {
-        log_error("wal_open_failed",
-                  "Could not open WAL at %s", wal_path);
+        log_error("wal_recovery_failed",
+                  "Could not recover durable state; refusing to start.");
         return 0;
     }
 
     log_info("wal_opened", "Write-ahead log: %s", wal_path);
-
-    if (recovery_replay_wal(runtime, &in_flight, wal_path) < 0)
-    {
-        log_error("wal_replay_failed",
-                  "Could not replay WAL; refusing to start.");
-        wal_close(&runtime->wal);
-        return 0;
-    }
 
     const char *bind_addr = getenv("IDR_BIND_ADDR");
     if (bind_addr == NULL || bind_addr[0] == '\0')
@@ -690,9 +683,30 @@ int start_runtime_server(
                      "Reaped in-flight tasks with no TASK_ACCEPT: %d",
                      unaccepted);
         }
+
+        /*
+         * Snapshot on the WAL policy's schedule. The snapshot
+         * covers every record written before this point and
+         * lets old segments be truncated, so the on-disk log
+         * stays bounded over an unbounded task stream.
+         */
+        if (recovery_snapshot_due(&runtime->wal))
+        {
+            if (!recovery_take_snapshot(runtime,
+                                        &in_flight,
+                                        &runtime->wal))
+            {
+                log_warn("snapshot_failed",
+                         "Periodic snapshot failed; the WAL remains "
+                         "the source of truth and the next attempt "
+                         "will retry");
+            }
+        }
     }
 
     close(server_socket);
+    wal_close(&runtime->wal);
+    coordinator_tasks_destroy(&in_flight);
 
     return 1;
 }

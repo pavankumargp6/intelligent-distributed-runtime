@@ -20,7 +20,7 @@ set -u
 export IDR_WORKER_SECRET="idr-test-worker-secret-do-not-use-in-production"
 export IDR_CLIENT_SECRET="idr-test-client-secret-do-not-use-in-production"
 export IDR_WAL_PATH=/tmp/idr_wal_hung_client_test.log
-rm -f "$IDR_WAL_PATH"
+rm -f "${IDR_WAL_PATH}"*
 COORD_PID=""
 HUNG_PID=""
 

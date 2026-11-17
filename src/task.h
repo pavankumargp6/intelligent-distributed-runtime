@@ -13,7 +13,17 @@ enum TaskState
     TASK_RUNNING = 1,
     TASK_COMPLETED = 2,
     TASK_FAILED = 3,
-    TASK_TIMED_OUT = 4
+    TASK_TIMED_OUT = 4,
+
+    /*
+     * The coordinator cannot prove whether the command ran.
+     *
+     * Used for non-idempotent tasks whose worker was lost or
+     * whose dispatch was never acknowledged. Treating these as
+     * FAILED would hide the possibility of duplicate side
+     * effects if an operator blindly retried them.
+     */
+    TASK_UNKNOWN = 5
 };
 
 struct Task
@@ -68,6 +78,16 @@ struct Task
      * against it.
      */
     int timeout_seconds;
+
+    /*
+     * Number of dispatch attempts made for this task.
+     *
+     * Starts at 0 when the task is submitted and is incremented
+     * immediately before TASK_ASSIGN is written to the WAL.
+     * Persisted in DISPATCH records and snapshots so the retry
+     * limit survives coordinator restarts.
+     */
+    int attempt;
 
     int pid;
     int exit_status;
