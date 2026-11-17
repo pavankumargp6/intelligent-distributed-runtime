@@ -40,10 +40,10 @@ sleep 2
 
 RESP=$(./build/client_query 1 2>/dev/null | grep -o 'QUERY_.*')
 
-if [ "$RESP" = "QUERY_RESULT|1|1|-1|3" ]; then
-    echo "===== worker reincarnation test: PASS ====="
+if [ "$RESP" = "QUERY_RESULT|1|1|-1|5" ]; then
+    echo "===== worker reincarnation test: PASS (TASK_UNKNOWN) ====="
     exit 0
 else
-    echo "FAIL: expected QUERY_RESULT|1|1|-1|3, got: $RESP"
+    echo "FAIL: expected QUERY_RESULT|1|1|-1|5, got: $RESP"
     exit 1
 fi

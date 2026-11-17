@@ -13,6 +13,7 @@ struct RuntimeStats
     int tasks_completed;
     int tasks_failed;
     int tasks_timed_out;
+    int tasks_unknown;
 
     double total_queue_wait_seconds;
     double total_execution_seconds;
@@ -50,6 +51,15 @@ void record_task_failed(struct RuntimeStats *stats);
  * "the command was killed because it exceeded its deadline".
  */
 void record_task_timed_out(struct RuntimeStats *stats);
+
+/*
+ * Record a task whose execution outcome is unknown.
+ *
+ * This is not a failure: the command may have completed. It is
+ * counted separately so operators can find tasks that need a
+ * manual decision.
+ */
+void record_task_unknown(struct RuntimeStats *stats);
 
 /*
  * Calculate average queue wait time.

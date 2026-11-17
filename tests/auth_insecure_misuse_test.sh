@@ -42,7 +42,7 @@ gcc -Wall -Wextra \
     src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$COORD_BIN" || exit 1
 
-rm -f /tmp/idr_wal_insecure_misuse.log
+rm -f /tmp/idr_wal_insecure_misuse.log*
 : > "$COORD_LOG"
 
 echo "===== Starting coordinator in insecure mode on 0.0.0.0 (should refuse) ====="
@@ -56,7 +56,7 @@ echo "===== Coordinator log ====="
 cat "$COORD_LOG"
 echo
 
-rm -f /tmp/idr_wal_insecure_misuse.log
+rm -f /tmp/idr_wal_insecure_misuse.log*
 
 if [ "$COORD_RC" -eq 0 ]; then
     echo "FAIL: coordinator exited 0 in insecure mode on 0.0.0.0"

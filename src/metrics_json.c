@@ -49,6 +49,7 @@ int build_metrics_http_response(struct Runtime *runtime,
         "  \"completed\": %d,\n"
         "  \"failed\": %d,\n"
         "  \"timed_out\": %d,\n"
+        "  \"unknown\": %d,\n"
         "  \"avg_queue_wait_ms\": %.2f,\n"
         "  \"avg_exec_ms\": %.2f\n"
         "}\n",
@@ -57,6 +58,7 @@ int build_metrics_http_response(struct Runtime *runtime,
         runtime->stats.tasks_completed,
         runtime->stats.tasks_failed,
         runtime->stats.tasks_timed_out,
+        runtime->stats.tasks_unknown,
         avg_qw_ms, avg_exec_ms);
 
     if (n <= 0 || (size_t)n >= max_len)

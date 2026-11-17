@@ -5,42 +5,34 @@
 #include "coordinator_tasks.h"
 
 /*
- * Replay a WAL file into the runtime and in-flight table.
+ * Start the coordinator's durability layer.
  *
- * Builds a picture of every submitted task and every recorded
- * result. Tasks that have a result go into the completed ring;
- * tasks without a result are re-enqueued so the scheduler can
- * dispatch them once a worker asks.
+ * This loads the newest valid snapshot (falling back to the
+ * previous one), replays WAL segments after its LSN, imports a
+ * legacy single-file WAL when no v2 data exists, applies the
+ * recovery policy for queued/dispatched/accepted tasks,
+ * opens the WAL for append, and writes an initial snapshot.
  *
- * Sets table->next_task_id to (max recovered task_id) + 1 so
- * new submissions do not collide with recovered ones.
- *
- * Returns the number of tasks recovered (queued + completed),
- * or -1 on read error.
+ * Returns 1 on success, 0 when the coordinator must refuse to
+ * start (corruption, queue overflow, unwritable storage).
  */
-int recovery_replay_wal(struct Runtime *runtime,
-                        struct InFlightTable *table,
-                        const char *path);
+int recovery_start(struct Runtime *runtime,
+                   struct InFlightTable *table,
+                   const char *wal_base_path);
 
 /*
- * Rewrite the WAL at path with only the live records.
- *
- * "Live" means:
- *   - for a task_id with a RESULT record: keep only the RESULT
- *   - for a task_id with a SUBMIT record but no RESULT: keep
- *     only the SUBMIT
- *
- * A task that is complete no longer needs its command or
- * arguments on disk; the completed ring stores only
- * (id, worker, exit, state). A pending task still needs its
- * SUBMIT record so a future restart can re-queue it.
- *
- * Writes to <path>.compact, fsyncs, and renames atomically
- * over the original. A missing file is not an error (returns
- * 1 with no work).
- *
- * Returns 1 on success, 0 on failure.
+ * Rotate to a new segment, write a snapshot covering every
+ * record up to the rotation boundary, update the manifest,
+ * and truncate segments that are fully covered by the previous
+ * snapshot. Safe to call repeatedly.
  */
-int recovery_compact_wal(const char *path);
+int recovery_take_snapshot(struct Runtime *runtime,
+                           struct InFlightTable *table,
+                           struct Wal *wal);
+
+/*
+ * Return 1 when the WAL policy says a snapshot is due.
+ */
+int recovery_snapshot_due(const struct Wal *wal);
 
 #endif

@@ -35,7 +35,7 @@ gcc -Wall -Wextra \
     src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$COORD_BIN" || exit 1
 
-rm -f /tmp/idr_wal_missing_secret.log
+rm -f /tmp/idr_wal_missing_secret.log*
 : > "$COORD_LOG"
 
 echo "===== Starting coordinator without secrets (should refuse) ====="
@@ -49,7 +49,7 @@ echo "===== Coordinator log ====="
 cat "$COORD_LOG"
 echo
 
-rm -f /tmp/idr_wal_missing_secret.log
+rm -f /tmp/idr_wal_missing_secret.log*
 
 if [ "$COORD_RC" -eq 0 ]; then
     echo "FAIL: coordinator exited 0 without secrets"

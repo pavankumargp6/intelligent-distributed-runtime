@@ -259,8 +259,11 @@ test:
 	@echo "===== wal_test.sh ====="
 	bash tests/wal_test.sh
 	@echo ""
-	@echo "===== recovery_compact_test.sh ====="
-	bash tests/recovery_compact_test.sh
+	@echo "===== wal_lifetime_test.sh ====="
+	bash tests/wal_lifetime_test.sh
+	@echo ""
+	@echo "===== recovery_snapshot_test.sh ====="
+	bash tests/recovery_snapshot_test.sh
 	@echo ""
 	@echo "===== raw_submit_test.sh ====="
 	bash tests/raw_submit_test.sh
@@ -294,6 +297,9 @@ test:
 	@echo ""
 	@echo "===== fault_injection_test.sh ====="
 	bash tests/fault_injection_test.sh
+	@echo ""
+	@echo "===== crash_recovery_test.sh ====="
+	bash tests/crash_recovery_test.sh
 	@echo ""
 	@echo "===== namespace_isolation_test.sh ====="
 	bash tests/namespace_isolation_test.sh

@@ -4,14 +4,14 @@
 #
 # Uses a deliberately silent worker that receives TASK_ASSIGN
 # but never sends TASK_ACCEPT. Verifies the coordinator's
-# dispatch-timeout reaper (Phase 4d):
+# dispatch-timeout reaper under the WAL 2.0 semantics:
 #
 #   Part A (non-idempotent task):
-#     - coordinator logs task_failed_timeout
-#     - query returns QUERY_RESULT|1|1|-1|3
+#     - coordinator logs task_unknown (the command may have run)
+#     - query returns QUERY_RESULT|1|1|-1|5 (TASK_UNKNOWN)
 #
 #   Part B (idempotent task):
-#     - coordinator logs task_requeued_timeout
+#     - coordinator logs task_requeued (bounded retry policy)
 #
 # DISPATCH_TIMEOUT_SECONDS is 15. Test waits 20s per part.
 
@@ -26,7 +26,7 @@ if ss -ltn 2>/dev/null | grep -q ":5001 "; then
 fi
 
 export IDR_WAL_PATH=/tmp/idr_wal_dispatch_timeout_test.log
-rm -f "$IDR_WAL_PATH"
+rm -f "${IDR_WAL_PATH}"*
 
 COORD_PID=""
 WORKER_PID=""
@@ -138,19 +138,19 @@ fi
 echo "  waiting for dispatch timeout (20s)..."
 sleep 20
 
-if ! grep -q "task_failed_timeout" "$COORD_LOG"; then
-    echo "FAIL: task_failed_timeout not logged"
+if ! grep -q '"event":"task_unknown"' "$COORD_LOG"; then
+    echo "FAIL: task_unknown not logged"
     cat "$COORD_LOG"
     exit 1
 fi
-echo "  task_failed_timeout logged."
+echo "  task_unknown logged."
 
 echo "  querying task 1..."
 QUERY_OUT=$("$QUERY_BIN" 1)
 echo "  $QUERY_OUT"
 
-if ! printf '%s' "$QUERY_OUT" | grep -q 'QUERY_RESULT|1|1|-1|3'; then
-    echo "FAIL: expected QUERY_RESULT|1|1|-1|3"
+if ! printf '%s' "$QUERY_OUT" | grep -q 'QUERY_RESULT|1|1|-1|5'; then
+    echo "FAIL: expected QUERY_RESULT|1|1|-1|5 (TASK_UNKNOWN)"
     cat "$COORD_LOG"
     exit 1
 fi
@@ -176,12 +176,12 @@ fi
 echo "  waiting for dispatch timeout (20s)..."
 sleep 20
 
-if ! grep -q "task_requeued_timeout" "$COORD_LOG"; then
-    echo "FAIL: task_requeued_timeout not logged"
+if ! grep -q '"event":"task_requeued"' "$COORD_LOG"; then
+    echo "FAIL: task_requeued not logged"
     cat "$COORD_LOG"
     exit 1
 fi
-echo "  task_requeued_timeout logged."
+echo "  task_requeued logged."
 
 echo
 echo "===== Coordinator log ====="

@@ -3,21 +3,23 @@
 # Fault injection test:
 #
 #   1. Start coordinator.
-#   2. Submit a long-running task (sleep 30).
+#   2. Submit a long-running non-idempotent task (sleep 30).
 #   3. Start worker under setsid so we can kill its whole process group.
 #   4. Wait for coordinator to dispatch the task.
 #   5. Kill the worker group while the task is in flight.
 #   6. Wait for the coordinator to reap the in-flight task.
-#   7. Query and assert TASK_FAILED with exit_status -1.
-#
-# Proves: the coordinator does not lose tasks when a worker
-# disappears mid-execution, and does not silently retry them.
+#   7. Query and assert TASK_UNKNOWN (state 5) with exit_status -1:
+#      the command may already have run, so the coordinator must
+#      not claim it failed.
+#   8. Kill the coordinator, restart on the same WAL, and query
+#      again: the unknown outcome must still be there, proving
+#      the reaper's RESULT was durable.
 
 set -u
 export IDR_WORKER_SECRET="idr-test-worker-secret-do-not-use-in-production"
 export IDR_CLIENT_SECRET="idr-test-client-secret-do-not-use-in-production"
 export IDR_WAL_PATH=/tmp/idr_wal_fault_injection_test.log
-rm -f "$IDR_WAL_PATH"
+rm -f "${IDR_WAL_PATH}"*
 
 if ss -ltn 2>/dev/null | grep -q ":5001 "; then
     echo "FAIL: port 5001 already in use. Kill leftovers first:"
@@ -93,16 +95,29 @@ gcc -Wall -Wextra -Isrc \
 : > "$COORD_LOG"
 : > "$WORKER_LOG"
 
-echo "===== Starting coordinator ====="
-"$COORD_BIN" > "$COORD_LOG" 2>&1 &
-COORD_PID=$!
-sleep 1
+start_coord() {
+    "$COORD_BIN" >> "$COORD_LOG" 2>&1 &
+    COORD_PID=$!
+    sleep 1
 
-if ! kill -0 "$COORD_PID" 2>/dev/null; then
-    echo "FAIL: coordinator did not stay running."
-    cat "$COORD_LOG"
-    exit 1
-fi
+    if ! kill -0 "$COORD_PID" 2>/dev/null; then
+        echo "FAIL: coordinator did not stay running."
+        cat "$COORD_LOG"
+        exit 1
+    fi
+}
+
+stop_coord_hard() {
+    if [ -n "$COORD_PID" ]; then
+        kill -KILL "$COORD_PID" 2>/dev/null
+        wait "$COORD_PID" 2>/dev/null
+        COORD_PID=""
+        sleep 1
+    fi
+}
+
+echo "===== Starting coordinator ====="
+start_coord
 
 echo "===== Submitting long task ====="
 "$CLIENT_BIN" sleep 30
@@ -164,23 +179,30 @@ echo "===== Querying task 1 ====="
 "$QUERY_BIN" 1 | tee "$QUERY_LOG"
 QUERY_RC=${PIPESTATUS[0]}
 
-if ! grep -q "QUERY_RESULT|1|1|-1|3" "$QUERY_LOG"; then
-    echo "===== Fault test: FAIL (query did not return TASK_FAILED) ====="
+if ! grep -q "QUERY_RESULT|1|1|-1|5" "$QUERY_LOG"; then
+    echo "===== Fault test: FAIL (query did not return TASK_UNKNOWN) ====="
     exit 1
 fi
-echo "===== Verifying WAL durability ====="
-if ! grep -q "RESULT|1|1|-1|3" "$IDR_WAL_PATH"; then
-    echo "===== Fault test: FAIL (WAL does not contain failed task result) ====="
-    echo "WAL file: $IDR_WAL_PATH"
-    cat "$IDR_WAL_PATH"
-    exit 1
-fi
-echo "PASS: Failed task was durably written to WAL."
 
 if [ "$QUERY_RC" -ne 0 ]; then
     echo "===== Fault test: FAIL (query client exit $QUERY_RC) ====="
     exit 1
 fi
+
+echo "===== Restarting coordinator on the same WAL ====="
+stop_coord_hard
+start_coord
+
+sleep 1
+
+"$QUERY_BIN" 1 | tee "$QUERY_LOG"
+
+if ! grep -q "QUERY_RESULT|1|1|-1|5" "$QUERY_LOG"; then
+    echo "===== Fault test: FAIL (unknown outcome lost after restart) ====="
+    exit 1
+fi
+
+echo "PASS: TASK_UNKNOWN outcome survived a coordinator restart."
 
 echo "===== Fault test: PASS ====="
 exit 0

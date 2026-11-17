@@ -17,7 +17,7 @@ set -u
 export IDR_WORKER_SECRET="idr-test-worker-secret-do-not-use-in-production"
 export IDR_CLIENT_SECRET="idr-test-client-secret-do-not-use-in-production"
 export IDR_WAL_PATH=/tmp/idr_wal_remote_exec_e2e_test.log
-rm -f "$IDR_WAL_PATH"
+rm -f "${IDR_WAL_PATH}"*
 
 if ss -ltn 2>/dev/null | grep -q ":5001 "; then
     echo "FAIL: port 5001 already in use. Kill leftovers first:"

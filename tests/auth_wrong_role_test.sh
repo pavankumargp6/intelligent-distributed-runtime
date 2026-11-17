@@ -24,7 +24,7 @@ COORD_LOG=/tmp/idr_coord_wrong_role.log
 
 cleanup() {
     [ -n "$COORD_PID" ] && kill -KILL "$COORD_PID" 2>/dev/null
-    rm -f /tmp/idr_wal_wrong_role.log
+    rm -f /tmp/idr_wal_wrong_role.log*
     true
 }
 trap cleanup EXIT
