@@ -176,10 +176,10 @@ static void test_snapshot_roundtrip(void)
           "in-flight task recorded");
 
     CHECK(wal_append(&runtime.wal,
-                     "SUBMIT|1|4:echo|1|0|1|0") == 1,
+                     "SUBMIT|1|4:echo|1|0:|1|0") == 1,
           "queued SUBMIT appended");
     CHECK(wal_append(&runtime.wal,
-                     "SUBMIT|2|11:charge-card|1|0|0|0") == 1,
+                     "SUBMIT|2|11:charge-card|1|0:|0|0") == 1,
           "in-flight SUBMIT appended");
     CHECK(wal_append(&runtime.wal,
                      "DISPATCH|2|2|0|1|1700000000") == 1,
@@ -315,6 +315,210 @@ static void test_snapshot_fallback(void)
     coordinator_tasks_destroy(&table);
 }
 
+static int segment_edge(const char *base,
+                        int highest,
+                        char *out,
+                        size_t out_size)
+{
+    char pattern[600];
+    snprintf(pattern, sizeof(pattern), "%s.seg.*", base);
+
+    glob_t matches;
+    memset(&matches, 0, sizeof(matches));
+
+    if (glob(pattern, 0, NULL, &matches) != 0 ||
+        matches.gl_pathc == 0)
+    {
+        globfree(&matches);
+        return 0;
+    }
+
+    size_t index = highest ? matches.gl_pathc - 1 : 0;
+
+    snprintf(out, out_size, "%s", matches.gl_pathv[index]);
+    globfree(&matches);
+
+    return 1;
+}
+
+/*
+ * Build a WAL with two segments: segment 1 contains a SUBMIT covered
+ * by the latest snapshot, and segment 2 contains a SUBMIT appended
+ * after that snapshot.
+ */
+static int build_two_segments(void)
+{
+    remove_files(g_base);
+
+    struct Runtime runtime;
+    struct TaskManager manager;
+    struct InFlightTable table;
+
+    init_harness(&runtime, &manager, &table);
+
+    if (recovery_start(&runtime, &table, g_base) != 1)
+    {
+        return 0;
+    }
+
+    struct Task first = make_task(1, "echo", 1);
+
+    runtime.stats.tasks_submitted = 1;
+    table.next_task_id = 2;
+
+    if (submit_task(&manager, &first) != 1 ||
+        wal_append(&runtime.wal, "SUBMIT|1|4:echo|1|3:one|1|0") != 1 ||
+        recovery_take_snapshot(&runtime, &table, &runtime.wal) != 1)
+    {
+        wal_close(&runtime.wal);
+        coordinator_tasks_destroy(&table);
+        return 0;
+    }
+
+    struct Task second = make_task(2, "echo", 1);
+
+    runtime.stats.tasks_submitted = 2;
+    table.next_task_id = 3;
+
+    if (submit_task(&manager, &second) != 1 ||
+        wal_append(&runtime.wal, "SUBMIT|2|4:echo|1|3:two|1|0") != 1)
+    {
+        wal_close(&runtime.wal);
+        coordinator_tasks_destroy(&table);
+        return 0;
+    }
+
+    wal_close(&runtime.wal);
+    coordinator_tasks_destroy(&table);
+
+    return 1;
+}
+
+static void test_corrupt_manifest(void)
+{
+    remove_files(g_base);
+
+    struct Runtime runtime;
+    struct TaskManager manager;
+    struct InFlightTable table;
+
+    init_harness(&runtime, &manager, &table);
+
+    CHECK(recovery_start(&runtime, &table, g_base) == 1,
+          "manifest: fresh start succeeds");
+
+    struct Task queued = make_task(1, "echo", 1);
+
+    runtime.stats.tasks_submitted = 1;
+    table.next_task_id = 2;
+
+    CHECK(submit_task(&manager, &queued) == 1,
+          "manifest: queued task accepted");
+    CHECK(wal_append(&runtime.wal,
+                     "SUBMIT|1|4:echo|1|0:|1|0") == 1,
+          "manifest: SUBMIT appended");
+    CHECK(recovery_take_snapshot(&runtime, &table, &runtime.wal) == 1,
+          "manifest: snapshot written");
+
+    wal_close(&runtime.wal);
+    coordinator_tasks_destroy(&table);
+
+    char path[600];
+    snprintf(path, sizeof(path), "%s.manifest", g_base);
+
+    int fd = open(path, O_WRONLY);
+
+    if (fd < 0)
+    {
+        CHECK(0, "manifest: open for corruption");
+        return;
+    }
+
+    CHECK(pwrite(fd, "XXXXXXX", 7, 0) == 7,
+          "manifest: header corrupted");
+    close(fd);
+
+    init_harness(&runtime, &manager, &table);
+
+    CHECK(recovery_start(&runtime, &table, g_base) == 1,
+          "recovery ignores a corrupt manifest and loads the newest "
+          "snapshot");
+    CHECK(manager.queue.count == 1,
+          "orphan snapshot restores the queued task");
+    CHECK(table.next_task_id == 2,
+          "orphan snapshot restores next_task_id");
+
+    wal_close(&runtime.wal);
+    coordinator_tasks_destroy(&table);
+}
+
+static void test_missing_covered_segment(void)
+{
+    if (!build_two_segments())
+    {
+        CHECK(0, "covered: build two segments");
+        return;
+    }
+
+    char path[600];
+
+    if (!segment_edge(g_base, 0, path, sizeof(path)))
+    {
+        CHECK(0, "covered: lowest segment exists");
+        return;
+    }
+
+    unlink(path);
+
+    struct Runtime runtime;
+    struct TaskManager manager;
+    struct InFlightTable table;
+
+    init_harness(&runtime, &manager, &table);
+
+    CHECK(recovery_start(&runtime, &table, g_base) == 1,
+          "recovery ignores a missing segment fully covered by the "
+          "snapshot");
+    CHECK(manager.queue.count == 2,
+          "recovery restores tasks from the snapshot and later segment");
+    CHECK(table.next_task_id == 3,
+          "covered: next_task_id restored");
+
+    wal_close(&runtime.wal);
+    coordinator_tasks_destroy(&table);
+}
+
+static void test_missing_uncovered_segment(void)
+{
+    if (!build_two_segments())
+    {
+        CHECK(0, "uncovered: build two segments");
+        return;
+    }
+
+    char path[600];
+
+    if (!segment_edge(g_base, 1, path, sizeof(path)))
+    {
+        CHECK(0, "uncovered: highest segment exists");
+        return;
+    }
+
+    unlink(path);
+
+    struct Runtime runtime;
+    struct TaskManager manager;
+    struct InFlightTable table;
+
+    init_harness(&runtime, &manager, &table);
+
+    CHECK(recovery_start(&runtime, &table, g_base) == 0,
+          "recovery refuses when a segment after the snapshot is "
+          "missing");
+
+    coordinator_tasks_destroy(&table);
+}
+
 static void test_legacy_import(void)
 {
     remove_files(g_base);
@@ -376,6 +580,9 @@ int main(void)
     test_snapshot_roundtrip();
     test_recovery_policy();
     test_snapshot_fallback();
+    test_corrupt_manifest();
+    test_missing_covered_segment();
+    test_missing_uncovered_segment();
     test_legacy_import();
 
     remove_files(g_base);

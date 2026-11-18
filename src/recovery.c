@@ -2351,6 +2351,23 @@ int recovery_start(struct Runtime *runtime,
         }
     }
 
+    /*
+     * A snapshot is only meaningful if every segment boundary it
+     * depends on still exists. Without this check, a deleted segment
+     * would silently drop acknowledged tasks and recovery would
+     * report success with incomplete state.
+     */
+    if (snapshot_loaded &&
+        !wal_validate_segment_chain(wal_base_path, snapshot.boundary_seq))
+    {
+        log_error("wal_segment_chain_invalid",
+                  "WAL segments required by snapshot LSN %llu are "
+                  "missing or non-contiguous; refusing to start",
+                  (unsigned long long)snapshot.lsn);
+        snapshot_data_free(&snapshot);
+        return 0;
+    }
+
     struct RecoveryState state;
     memset(&state, 0, sizeof(state));
 

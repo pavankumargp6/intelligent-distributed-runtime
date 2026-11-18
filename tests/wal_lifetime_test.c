@@ -169,6 +169,13 @@ int main(void)
                                      TASK_COMPLETED);
         record_task_completed(&runtime.stats, 0.0, 0.0);
 
+        /*
+         * Model the allocator: in production every task ID comes
+         * from next_task_id, so snapshots must capture the advanced
+         * watermark or recovery would rewind and reuse IDs.
+         */
+        table.next_task_id = (int)i + 1;
+
         if (i % snapshot_every == 0)
         {
             if (!recovery_take_snapshot(&runtime, &table,
@@ -261,6 +268,8 @@ int main(void)
           / 1000000000.0;
 
     CHECK(restart_ok, "restart from snapshot + segments succeeds");
+    CHECK(table.next_task_id == (int)total + 1,
+          "restart never reuses or rewinds task ids");
     CHECK(runtime.stats.tasks_completed == (int)total,
           "restart restores the lifetime completed counter");
     CHECK(coordinator_history_count(&table.history) == 5000,

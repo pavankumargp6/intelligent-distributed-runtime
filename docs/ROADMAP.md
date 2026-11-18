@@ -1,6 +1,6 @@
 # IDR Roadmap to 1.0
 
-Status: Phase 0 and Phase 1 complete (v0.2.0); Phase 2 next
+Status: Phase 0 and Phase 1 complete (v0.2.1); Phase 2 next
 Last updated: 2026-11-18
 
 This document is the canonical project roadmap. It records what "10/10"
@@ -23,7 +23,7 @@ semantics, scale, and evidence.
 
 | Dimension | Current (v0.2) | v1.0 target |
 |---|---|---|
-| Durability | WAL 2.0: framed segments, snapshots, bounded footprint; 1M lifetime tasks and 7 crash points tested | Recovery-time/RSS evidence at scale; backup/restore and disk-full drills |
+| Durability | WAL 2.0: framed segments, snapshots, bounded footprint; 1M lifetime tasks, 3.7 MB RSS, 7 crash points, and corruption/missing-segment tests | Backup/restore and disk-full drills; chaos runs |
 | Semantics | Explicit policy: uncertain non-idempotent tasks become `TASK_UNKNOWN`; queued tasks still return `QUERY_UNKNOWN` | `QUERY_PENDING_QUEUED`; attempts exposed on the wire |
 | Scheduling | Static capacity fit; `available == total` | Live slots/load; reservations; fairness; backpressure |
 | Scale | Queue 512; in-flight/completed 64; 16-worker pool | Dynamic limits; 100+ workers; 1k+ concurrent; 10k+ queued |
@@ -85,7 +85,8 @@ the documentation alone.
 ## Phase 1 - WAL 2.0
 
 Status: complete. Shipped as v0.2.0 in PR #10 (implementation and
-tests) plus this documentation update. Tracking issues: #1-#8.
+tests), documented in PR #11, and hardened in v0.2.1. Tracking
+issues: #1-#8.
 
 Context: v0.1 kept every `SUBMIT` and `RESULT` line and capped both
 compaction and replay at 4,096 unique tasks, so after 4,096 lifetime
@@ -103,10 +104,12 @@ retention policy rather than by lifetime task count.
 - [x] Truncate segments fully covered by a snapshot
 - [x] Define and enforce a retention policy for completed results
 - [x] Add a crash-point test harness (`IDR_TEST_CRASH_AT=...`)
-- [x] Add torn-tail and mid-file corruption tests
+- [x] Add torn-tail, mid-file, snapshot, manifest, and unknown-version
+      corruption tests
+- [x] Refuse recovery when a segment required by the snapshot is missing
 - [x] Add a 1M-lifetime-task restart test (`tests/wal_lifetime_test.sh`)
-- [x] Measure recovery time as the WAL grows (2 ms after 1M tasks);
-      RSS measurement is part of the Phase 3 benchmark harness
+- [x] Measure recovery time and RSS as the WAL grows (2 ms and 3.7 MB
+      RSS after 1M tasks; the test asserts the 256 MB bound)
 
 What shipped:
 
@@ -121,8 +124,11 @@ What shipped:
   the latest snapshot are removed; the two most recent snapshots are
   kept so a corrupt newest snapshot can fall back to the previous one.
 - **Recovery.** `recovery_start()` loads the latest valid snapshot,
-  replays only segments after the snapshot LSN, and materializes
-  queued, in-flight, and retained terminal tasks.
+  verifies that the segment chain is contiguous and still contains the
+  segment created by the snapshot rotation, replays only segments after
+  the snapshot LSN, and materializes queued, in-flight, and retained
+  terminal tasks. A missing required segment refuses startup instead of
+  silently recovering incomplete state.
 - **Policy.** Non-idempotent tasks whose outcome cannot be determined
   recover to `TASK_UNKNOWN` (state 5). Idempotent tasks are requeued,
   bounded by `COORDINATOR_MAX_ATTEMPTS` (default 3). `DISPATCH` is
@@ -136,23 +142,26 @@ What shipped:
   watermark that are no longer tracked return `QUERY_EXPIRED`.
 - **Evidence.** `tests/crash_recovery_test.sh` injects a crash at
   seven durability points and restarts on the same WAL after each.
-  `tests/wal_lifetime_test.c` pushes 1,000,000 tasks (2M records)
-  through the log, asserts bounded history and segments, then
-  restarts and times recovery: **2 ms** on the reference WSL2 host.
+  `tests/wal_test.c` and `tests/recovery_snapshot_test.c` cover torn
+  tails, mid-file CRC corruption, unknown format versions, corrupt
+  manifests, snapshot fallback, and missing segments both inside and
+  beyond the snapshot boundary. `tests/wal_lifetime_test.c` pushes
+  1,000,000 tasks (2M records) through the log, asserts bounded history
+  and segments, then restarts and times recovery: **2 ms** and
+  **3.7 MB peak RSS** on the reference WSL2 host.
 
 Deliberately deferred to later phases:
 
 - `QUERY_PENDING_QUEUED` for queued tasks is Phase 2; v0.2 keeps
   returning `QUERY_UNKNOWN`, pinned by tests and documented in
   `docs/SEMANTICS.md`.
-- RSS measurement under a growing WAL belongs to the Phase 3
-  benchmark harness.
 - The accepted-but-start-failed stuck-in-flight defect is Phase 2.
 
 Exit criteria: met. 1M lifetime tasks; bounded WAL (3 segments after
-2M records in the test); recovery in milliseconds; no acknowledged
-task lost across the crash matrix; no silent duplicate execution of
-non-idempotent tasks (they become `TASK_UNKNOWN`).
+2M records in the test); recovery in milliseconds with 3.7 MB peak RSS;
+no acknowledged task lost across the crash matrix or the missing-segment
+tests; no silent duplicate execution of non-idempotent tasks (they
+become `TASK_UNKNOWN`).
 
 ## Phase 2 - Scheduler and worker lifecycle
 
