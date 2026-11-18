@@ -1,9 +1,17 @@
 # ADR-001: Snapshot and WAL Segmentation
 
-- Status: Proposed
+- Status: Accepted (implemented in v0.2.0, Phase 1)
 - Date: 2026-11-15
 - Phase: 1
 - Related: `docs/SEMANTICS.md`, `docs/ARCHITECTURE.md`
+
+Implementation note (v0.2.0): segments are `<base>.seg.<20-digit
+sequence>` with a 24-byte header and per-record CRC32C; snapshots are
+`<base>.snap.<20-digit lsn>.dat` with `IDRSNP2` magic and a payload
+checksum; `<base>.manifest` names the active snapshot boundary and is
+written atomically. The two most recent snapshots are kept. The data
+model differs from this ADR in one place: a snapshot also carries
+retained terminal results, so queries do not replay the WAL.
 
 ## Context
 

@@ -301,8 +301,10 @@ Response: one of
 
 - `QUERY_RESULT|<id>|<worker>|<exit>|<state>` — task finished
 - `QUERY_PENDING|<id>` — task currently in the in-flight table
-- `QUERY_UNKNOWN|<id>` — task never seen, or aged out of the
-  completed ring
+- `QUERY_EXPIRED|<id>` — id is below `next_task_id` but aged out of
+  retention
+- `QUERY_UNKNOWN|<id>` — task never seen; in v0.2 a queued task also
+  returns this (Phase 2 target: `QUERY_PENDING`)
 
 **`STATUS`**
 
@@ -433,7 +435,7 @@ Field meanings:
 | `active` | registry entries with status `WORKER_ACTIVE` |
 | `queue` | tasks currently in the FIFO queue |
 | `inflight` | entries in the in-flight table |
-| `submitted` | cumulative tasks submitted since coordinator start (or since the last WAL replay) |
+| `submitted` | cumulative tasks submitted since the last snapshot (restored on restart) |
 | `completed` | cumulative tasks completed |
 | `failed` | cumulative tasks failed |
 
@@ -446,7 +448,9 @@ States are defined in `task.h` as `enum TaskState`:
 | 0 | `TASK_CREATED` | accepted, in queue or being assigned |
 | 1 | `TASK_RUNNING` | (not used by the coordinator; reserved) |
 | 2 | `TASK_COMPLETED` | worker reported exit status 0 |
-| 3 | `TASK_FAILED` | worker reported nonzero, worker was lost, or dispatch timed out on a non-idempotent task |
+| 3 | `TASK_FAILED` | worker reported nonzero, worker was lost and the task is provably not running, or dispatch timed out on a non-idempotent task |
+| 4 | `TASK_TIMED_OUT` | worker killed the task after its execution timeout |
+| 5 | `TASK_UNKNOWN` | the task may have run, but its outcome cannot be determined safely |
 
 A task's journey through the coordinator:
 
@@ -454,32 +458,37 @@ A task's journey through the coordinator:
 SUBMIT received
    |
    v
-queued (WAL: SUBMIT|<id>|...)
+queued (WAL: SUBMIT record)
    |
    v  worker sends TASK_REQUEST, scheduler picks it
 in-flight table (worker_id, dispatched_at, accepted=0)
-   |
+   |  (WAL: DISPATCH record, fsynced before TASK_ASSIGN is sent)
    v  worker sends TASK_ACCEPT
 accepted=1, no longer subject to dispatch timeout
-   |
+   |  (WAL: ACCEPT record, fsynced before the state changes)
    v  worker sends TASK_RESULT
-completed ring (WAL: RESULT|<id>|...)
+retained history (WAL: RESULT record, fsynced before the in-flight entry is removed)
 ```
 
 Alternative paths:
 
-- **Dispatch timeout on a non-idempotent task.** In-flight entry is
-  removed, task is moved to the completed ring with state
-  `TASK_FAILED` and exit status `-1`, and a `RESULT` record is
-  appended to the WAL.
-- **Dispatch timeout on an idempotent task.** In-flight entry is
-  removed and the task is requeued. The scheduler may dispatch it
-  again on the next `TASK_REQUEST`.
-- **Worker loss.** When `mark_stale_workers` marks the assigned
-  worker unavailable, the in-flight reaper runs on the next
-  coordinator tick. Its behavior is the same as a dispatch
-  timeout — idempotent tasks are requeued, non-idempotent tasks
-  are failed.
+- **Dispatch timeout on a non-idempotent task.** The in-flight entry is
+  removed, the task moves to retained history with state
+  `TASK_UNKNOWN` and exit status `-1`, and a `RESULT` record is
+  appended to the WAL before removal.
+- **Dispatch timeout on an idempotent task.** The task is requeued while
+  the attempt count stays below `COORDINATOR_MAX_ATTEMPTS`; otherwise it
+  becomes `TASK_UNKNOWN`.
+- **Worker loss.** When `mark_stale_workers` marks the assigned worker
+  unavailable, the in-flight reaper reconciles the task with the same
+  policy: idempotent tasks are requeued, non-idempotent tasks become
+  `TASK_UNKNOWN`.
+- **Accepted, no result.** After a restart, a durable `ACCEPT` without a
+  `RESULT` follows the same policy: idempotent requeue, non-idempotent
+  `TASK_UNKNOWN`.
+- **Duplicate result.** The first terminal result wins; later results
+  are ACKed and ignored. A result from a worker other than the assigned
+  worker is rejected with `TASK_RESULT_REJECT`.
 
 ## 7. Errors and rejections
 
@@ -557,7 +566,7 @@ coordinator:
 | `IDR_CLIENT_SECRET` | coordinator, client | shared secret for client-channel messages; 32 bytes minimum in secure mode |
 | `IDR_INSECURE` | coordinator, worker, client | `1` disables authentication entirely; the coordinator additionally requires a loopback bind address in this mode |
 | `IDR_BIND_ADDR` | coordinator | bind address; default `127.0.0.1` |
-| `IDR_WAL_PATH` | coordinator | write-ahead log path; default `./idr-wal.log` |
+| `IDR_WAL_PATH` | coordinator | write-ahead log base path; segments, snapshots, and the manifest are derived from it (default `./idr-wal.log`) |
 
 In secure mode (the default), the coordinator refuses to start
 without both secrets. In insecure mode it refuses to start unless

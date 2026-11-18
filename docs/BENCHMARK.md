@@ -70,10 +70,11 @@ completion count does not reach the requested total before a
 300-second timeout, or if any task reports `state=3` (FAILED).
 
 The client retries a submission on `SUBMIT_REJECT`. This is
-required: the coordinator's task queue holds 64 tasks, and
-localhost submission rates fill it in milliseconds. Retrying
-makes the benchmark measure sustained throughput rather than
-burst-fill behavior. Retry counts are reported by the client.
+required: the task queue is bounded, and localhost submission rates
+fill it in milliseconds. Retrying makes the benchmark measure
+sustained throughput rather than burst-fill behavior. Retry counts are
+reported by the client. (The runs below predate v0.2, when the queue
+held 64 tasks; it now holds 512.)
 
 ## 4. Results
 
@@ -197,15 +198,14 @@ is ~2.7 connections per second across 8 workers. The client
 submission traffic and task-dispatch traffic dominate by a
 wide margin. The current architecture is adequate.
 
-**A separate limit is worth addressing first: the 64-slot task
-queue.** Localhost submission rates exceed 5,000 per second.
-The queue fills in under 15 ms under a burst. Any further
-submissions are rejected until the worker drains. This is a
-correctness-preserving failure (no tasks are silently
-dropped), but it caps the coordinator's ability to absorb
-bursty client behavior. Future work might add a bounded
-in-flight queue with a blocking accept, or a larger queue, or
-a client-side backpressure protocol.
+**A separate limit is worth addressing first: the task queue.** In the
+runs above it held 64 slots; v0.2 raised it to 512. Localhost
+submission rates exceed 5,000 per second, so even 512 slots fill in
+well under a second under a burst. Any further submissions are rejected
+until the worker drains. This is a correctness-preserving failure (no
+tasks are silently dropped), but it caps the coordinator's ability to
+absorb bursty client behavior. Future work might add admission control
+with backpressure or a client-side backpressure protocol.
 
 ## 7. Benchmark limitations
 

@@ -1,9 +1,16 @@
 # ADR-002: Delivery Semantics for Tasks and Results
 
-- Status: Proposed
+- Status: Accepted (implemented in v0.2.0, Phase 1)
 - Date: 2026-11-15
 - Phase: 1
 - Related: `docs/SEMANTICS.md`, ADR-001, ADR-003
+
+Implementation note (v0.2.0): `TASK_UNKNOWN` is wire state 5 and is
+terminal for the current attempt. Idempotent requeues are bounded by
+`COORDINATOR_MAX_ATTEMPTS` (default 3). Recovery does not increment the
+attempt counter; the coordinator increments it once when it appends
+`DISPATCH`. `QUERY_PENDING` for queued tasks and attempt history on the
+wire remain Phase 2 items.
 
 ## Context
 
@@ -70,12 +77,12 @@ non-idempotent tasks.
 
 ### Dispatch timeout
 
-Current behavior:
+v0.1 behavior:
 
 - idempotent: requeue;
 - non-idempotent: fail with `TASK_FAILED` and exit status -1.
 
-Target behavior:
+Adopted in v0.2:
 
 - idempotent: requeue with a new attempt, up to the retry limit;
 - non-idempotent: `TASK_UNKNOWN`, because the worker may have received

@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "recovery.h"
@@ -228,11 +229,52 @@ int main(void)
     CHECK(segments < 100,
           "snapshots keep the segment count bounded");
 
-    printf("\n%d passed, %d failed (tasks=%llu segments=%d)\n",
+    /*
+     * Timed restart: recovery must restore the lifetime state from
+     * the latest snapshot plus the segment tail, and it must do so
+     * quickly. The exit criterion for Phase 1 is recovery under
+     * five seconds after a million lifetime tasks.
+     */
+    wal_close(&runtime.wal);
+    coordinator_tasks_destroy(&table);
+
+    initialize_task_manager(&manager);
+    initialize_runtime_stats(&runtime.stats);
+
+    runtime.task_manager = &manager;
+    runtime.wal.fd = -1;
+
+    coordinator_tasks_init(&table);
+
+    struct timespec restart_begin;
+    struct timespec restart_end;
+
+    clock_gettime(CLOCK_MONOTONIC, &restart_begin);
+
+    int restart_ok = recovery_start(&runtime, &table, g_base);
+
+    clock_gettime(CLOCK_MONOTONIC, &restart_end);
+
+    double recovery_seconds =
+        (double)(restart_end.tv_sec - restart_begin.tv_sec)
+        + (double)(restart_end.tv_nsec - restart_begin.tv_nsec)
+          / 1000000000.0;
+
+    CHECK(restart_ok, "restart from snapshot + segments succeeds");
+    CHECK(runtime.stats.tasks_completed == (int)total,
+          "restart restores the lifetime completed counter");
+    CHECK(coordinator_history_count(&table.history) == 5000,
+          "restart restores the bounded retained history");
+    CHECK(recovery_seconds < 5.0,
+          "recovery after 1M tasks stays under 5 seconds");
+
+    printf("\n%d passed, %d failed "
+           "(tasks=%llu segments=%d recovery_seconds=%.3f)\n",
            passed,
            failed,
            (unsigned long long)total,
-           segments);
+           segments,
+           recovery_seconds);
 
     wal_close(&runtime.wal);
     coordinator_tasks_destroy(&table);

@@ -3,14 +3,16 @@
 [![CI](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/pavankumargp6/badge.svg)](https://hub.xerj.org/contributors/pavankumargp6)
 
-> **Project status: pre-1.0, unreleased.**
+> **Project status: v0.2.0 (pre-1.0).**
 >
 > This code is a working systems demonstration of durable task
-> submission, process-level execution, scheduling, and crash recovery. It
-> is **not** production-ready. Known limits include a 4,096-task WAL
-> recovery cliff, replay that can re-run non-idempotent tasks, fixed
-> demo-scale capacities, plaintext transport, and a single coordinator.
-> See [Status and limitations](#status-and-limitations) and
+> submission, process-level execution, scheduling, and crash recovery.
+> WAL 2.0 makes durability bounded and crash-tested (1,000,000 lifetime
+> tasks, 2 ms restart), and uncertain non-idempotent outcomes return
+> `TASK_UNKNOWN` instead of being silently retried. It is **not**
+> production-ready: capacities are still demo-scale, transport is
+> plaintext, and there is a single coordinator. See
+> [Status and limitations](#status-and-limitations) and
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) for the path to 1.0.
 
 IDR is a distributed task execution engine written in C for Linux. It
@@ -48,11 +50,11 @@ graph TD
 
 ## Core Features
 
-*   **Crash recovery (with a known ceiling):** Write-Ahead Logging (WAL)
-    with `fsync` before acknowledgement, startup replay, WAL compaction,
-    and worker reincarnation detection. Compaction rewrites the file but
-    keeps every record, and recovery is capped at 4,096 lifetime tasks.
-    See [Status and limitations](#status-and-limitations).
+*   **Bounded, crash-tested durability:** WAL 2.0 uses framed,
+    CRC-protected segments, atomic snapshots, and a manifest. Recovery
+    replays the snapshot plus the segment tail in 2 ms after 1,000,000
+    lifetime tasks, and seven injected crash points are covered by
+    tests. See [Durability](#durability).
 *   **Authenticated networking:** TCP sockets with HMAC-SHA256
     authentication, role-specific secrets, timestamp checks, and replay
     protection. Messages are authenticated but not encrypted.
@@ -82,7 +84,7 @@ graph TD
 | [`docs/RELEASES.md`](docs/RELEASES.md) | Versioning, compatibility, deprecation, release checklist |
 | [`docs/adr/`](docs/adr/) | Architecture decision records for durability, semantics, and identity |
 
-The documents separate **current v0.x behavior** from **v1.0 target
+The documents separate **current v0.2 behavior** from **v1.0 target
 behavior**. If code and documentation disagree, that is a bug.
 
 ## Performance & Benchmarks
@@ -264,62 +266,56 @@ under sanitizers.
 
 ### Durability
 
-*   **Lifetime task ceiling.** Compaction keeps every `SUBMIT` and
-    `RESULT` record, and both compaction and replay are capped at
-    `RECOVERY_MAX_TASKS` (4,096 unique tasks). After 4,096 lifetime
-    tasks, startup fails with `wal_compact_index_full`,
-    `wal_recovery_overflow`, and `wal_replay_failed`. Removing the WAL
-    is currently the only way to restart.
-*   **No on-disk format versioning or checksums.** The WAL is
-    newline-delimited text with no magic value, format version, or
-    per-record checksum. A torn record at EOF is skipped with a
-    warning rather than distinguished from mid-file corruption.
-*   **Bounded retention.** Only the last 64 terminal results are kept in
-    memory. Older results return `QUERY_UNKNOWN` even though the WAL
-    still contains them. Queued tasks also return `QUERY_UNKNOWN`
-    because they are neither in flight nor completed.
-*   **Recovery queue is 64.** After a crash, only the first 64 unfinished
-    tasks can be requeued in memory. The rest remain in the WAL and wait
-    for a later restart.
-*   **A failed result append loses the result.** The coordinator removes a
-    task from in-flight before appending its `RESULT` record. If that
-    append fails, no ACK is sent, the worker does not retry, and the task
-    is neither in flight nor completed until a restart treats it as
-    unfinished.
+*   **No lifetime task ceiling.** WAL 2.0 keeps framed segments behind
+    atomic snapshots and removes segments fully covered by the latest
+    snapshot. The log is bounded by the snapshot cadence and retention,
+    not by lifetime task count. The 1M-task lifetime test leaves 3
+    segments and restarts in 2 ms.
+*   **Explicit uncertainty.** A non-idempotent task whose outcome cannot
+    be proven after a crash or worker loss returns `TASK_UNKNOWN`
+    (state 5). It is never reported as `FAILED` and never silently
+    retried. Idempotent tasks are requeued, bounded by
+    `COORDINATOR_MAX_ATTEMPTS` (default 3).
+*   **Bounded retention.** The in-memory index retains the last
+    `IDR_RESULT_RETENTION` results (default 100,000) for at most
+    `IDR_RESULT_RETENTION_SECONDS` (default 7 days). Aged-out ids return
+    `QUERY_EXPIRED`. Queued tasks still return `QUERY_UNKNOWN` in v0.2;
+    `QUERY_PENDING` for queued tasks is a Phase 2 item.
 *   **Acknowledgement is not exactly-once.** `SUBMIT_ACK` means the
     `SUBMIT` record was fsynced and the task was queued. It does not
     mean the task will run exactly once. A client that loses the ACK
     and retries can create a second task.
 
-The design for the replacement is in
-[`docs/adr/0001-snapshot-and-wal-segmentation.md`](docs/adr/0001-snapshot-and-wal-segmentation.md).
+Remaining durability work is in
+[`docs/ROADMAP.md`](docs/ROADMAP.md): result-report retry with backoff,
+the accepted-but-start-failed stuck-in-flight defect, and disk-full and
+backup/restore drills.
 
 ### Delivery semantics
 
-*   The `idempotent` flag is honored on dispatch timeout but **not**
-    during crash recovery or worker-loss reaping. Recovery tries to
-    requeue every task without a recorded result, up to the 64-entry
-    queue, including non-idempotent tasks.
-*   There is no `UNKNOWN` state. A task whose outcome cannot be
-    determined is reported as `FAILED`, which hides the possibility that
-    it ran.
-*   There is no `DISPATCH` or `ACCEPT` record in the WAL, so recovery
-    cannot tell "assigned but never started" from "started, result
-    lost."
+*   The `idempotent` flag is honored consistently: dispatch timeouts and
+    crash recovery both requeue idempotent tasks within the attempt
+    bound, while non-idempotent tasks with an uncertain outcome become
+    `TASK_UNKNOWN`.
+*   `DISPATCH` and `ACCEPT` records are durable, so recovery
+    distinguishes "assigned but never started" from "started, result
+    lost." Both uncertain cases map to `TASK_UNKNOWN` for
+    non-idempotent tasks.
+*   The first terminal result wins; a result from a worker other than
+    the assigned worker is rejected with `TASK_RESULT_REJECT`.
 
-The policy for v1.0 is in
-[`docs/adr/0002-delivery-semantics.md`](docs/adr/0002-delivery-semantics.md);
-the current behavior is catalogued in
-[`docs/SEMANTICS.md`](docs/SEMANTICS.md).
+The policy is documented in
+[`docs/SEMANTICS.md`](docs/SEMANTICS.md) and
+[`docs/adr/0002-delivery-semantics.md`](docs/adr/0002-delivery-semantics.md).
 
 ### Scale
 
-Queue depth, in-flight tasks, completed results, the worker pool, the
+Queue depth, in-flight tasks, retained results, the worker pool, the
 worker registry, and the connection pool are fixed-size arrays. The
-current values are 64, 64, 64, 16, 32, and 64 respectively. Worker
-availability is reported as its total capacity and is never decremented
-while tasks run, so scheduling is capacity filtering rather than live
-load balancing.
+current values are 512, 64, 100,000, 16, 32, and 64 respectively.
+Worker availability is reported as its total capacity and is never
+decremented while tasks run, so scheduling is capacity filtering rather
+than live load balancing.
 
 ### Security
 
@@ -373,14 +369,13 @@ multiple measured runs, and percentile reporting. See
 
 ## Roadmap
 
-Phase 0 is the documentation and contract baseline; implementation work
-starts at Phase 1. The phases and exit criteria are in
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+Phases 0 and 1 are complete; v0.2.0 ships WAL 2.0. Phase 2 is next. The
+phases and exit criteria are in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 | Phase | Focus |
 |---|---|
-| 0 | Contract, architecture, threat model, release policy |
-| 1 | WAL 2.0: snapshots, segments, checksums, recovery policy |
+| 0 | Contract, architecture, threat model, release policy (done) |
+| 1 | WAL 2.0: snapshots, segments, checksums, recovery policy (done, v0.2.0) |
 | 2 | Live scheduling, worker lifecycle, per-worker identity and epochs |
 | 3 | Persistent connections, scale, reproducible benchmarks |
 | 4 | TLS, quotas, sandbox, parser fuzzing |

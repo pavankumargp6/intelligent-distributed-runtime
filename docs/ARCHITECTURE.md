@@ -1,7 +1,7 @@
 # IDR Architecture
 
-Status: Current v0.x, with v1.0 targets called out
-Last updated: 2026-11-15
+Status: Current for v0.2, with v1.0 targets called out
+Last updated: 2026-11-18
 
 This document describes the components of the Intelligent Distributed
 Runtime, how a task moves through them, and which invariants the current
@@ -221,62 +221,64 @@ v1.0 target:
 
 ## 7. Durability
 
-### 7.1 WAL format
+### 7.1 WAL format (v0.2)
 
-The WAL is a newline-delimited text file. Each line is one of:
+The WAL is a sequence of framed binary segments named
+`<base>.seg.<20-digit sequence>`. Each segment starts with a 24-byte
+header (`IDRS` magic, format version, 64-bit sequence). Records are:
 
 ```
-SUBMIT|<task_id>|<command field>|<argc>|<arg fields>|<idempotent>|<timeout>
-RESULT|<task_id>|<worker_id>|<exit_status>|<state>
+[4B magic "WLR2"][2B version][1B type][1B reserved]
+[8B LSN][4B payload length][payload][4B CRC32C]
 ```
 
-Variable-length string fields use the same `<length>:<bytes>` encoding as
-the wire protocol. Records are written with a single `write()` call and
-fsynced before `wal_append()` returns.
+Record types are `SUBMIT`, `DISPATCH`, `ACCEPT`, and `RESULT`; payloads
+use the same length-prefixed field encoding as the wire protocol.
+Records are appended with a single `write()` and fsynced before
+`wal_append()` returns (group commit is Phase 3). The `segment_bytes`
+knob (`IDR_SEGMENT_BYTES`, default 4 MiB) controls rotation.
 
-The WAL has no magic number, format version, or per-record checksum.
-`wal_foreach_line()` skips malformed lines with a warning. A torn final
-record is therefore treated similarly to mid-file corruption; v1.0 will
-distinguish them and add checksums.
+State that does not need replaying lives in snapshots named
+`<base>.snap.<20-digit lsn>.dat`. A snapshot carries the `IDRSNP2`
+magic, a format version, the snapshot LSN, `next_task_id`, counters,
+queued tasks, in-flight tasks (including the assigned worker), and
+retained results. It is written to a temp file, fsynced, renamed, and
+the directory is fsynced; `<base>.manifest` is written the same way and
+names the active snapshot boundary. The last two snapshots are kept so
+a corrupt newest snapshot can fall back to the previous one.
 
-### 7.2 Startup compaction
+A v0.1 newline-delimited text WAL found at `<base>` is imported once
+and renamed `<base>.legacy`.
 
-Before replay, the coordinator scans the WAL and rewrites it through a
-temporary file plus `fsync` and `rename`.
+### 7.2 Snapshots and truncation
 
-The current compaction policy keeps every `SUBMIT` and `RESULT` line for
-any task ID it knows about. It does not drop completed tasks. The code
-comment explains why: dropping the `SUBMIT` would lose the command,
-arguments, idempotency flag, and timeout needed by recovery.
+A snapshot is taken every 10,000 records or 300 seconds, and once after
+startup recovery. Once the manifest points at a snapshot, segments
+fully covered by it are removed. The result is a bounded footprint:
+after 1,000,000 lifetime tasks (2M records) with 64 KiB test segments,
+the WAL holds 3 segments.
 
-The result is that the WAL does not shrink. Recovery and compaction are
-both capped at `RECOVERY_MAX_TASKS` (4,096 unique tasks). After 4,096
-lifetime tasks:
-
-- compaction logs `wal_compact_index_full` and is skipped;
-- replay logs `wal_recovery_overflow` and refuses to start;
-- the coordinator exits with `wal_replay_failed`.
-
-This is the most important durability defect in v0.x. ADR-001 defines
-the snapshot-and-segment replacement.
+The v0.1 text WAL had no magic, version, or checksum, kept every record
+forever, and refused to start after 4,096 lifetime tasks. That design
+is retired; ADR-001 records the replacement.
 
 ### 7.3 Recovery
 
-Recovery buffers up to 4,096 submissions and 4,096 results in static
-arrays, then:
+`recovery_start()`:
 
-- restores completed results into the 64-entry completed ring;
-- tries to requeue every submission without a matching result;
-- sets `next_task_id` to the maximum seen ID plus one;
-- reconstructs submission, completion, failure, and timeout counters.
+1. reads the manifest;
+2. loads the newest valid snapshot, falling back to the previous one if
+   it is corrupt;
+3. replays segments with records after the snapshot LSN;
+4. applies the delivery policy from `docs/SEMANTICS.md`: duplicate
+   results are ignored, uncertain non-idempotent tasks become
+   `TASK_UNKNOWN`, idempotent tasks are requeued within the attempt
+   bound;
+5. restores counters and `next_task_id`, then writes a fresh snapshot.
 
-The requeue step is bounded by the 64-entry task queue. If a crash leaves
-more than 64 unfinished tasks, only the first 64 are queued in memory;
-the rest stay in the WAL and are not scheduled until a later restart
-re-reads them.
-
-Recovery does not consult the `idempotent` flag. Any task without a
-recorded result is retried. ADR-002 defines the target policy.
+Recovery time is bounded by the snapshot cadence rather than lifetime
+task count: `tests/wal_lifetime_test.c` measures 2 ms after 1,000,000
+tasks on the reference WSL2 host.
 
 ## 8. Authentication and authorization
 
@@ -341,21 +343,21 @@ is not safe for arbitrary hostile code.
 
 ## 10. Failure handling
 
-| Failure | Current behavior | v1.0 target |
+| Failure | Current v0.2 behavior | v1.0 target |
 |---|---|---|
 | Client disconnects before ACK | Task may or may not exist; retry can duplicate | Optional idempotency key |
-| Worker never accepts | 15-second dispatch timeout; idempotent requeue, non-idempotent fail | Same, with WAL `DISPATCH` record |
-| Worker stops heartbeating | After 10 seconds, all its in-flight tasks fail | Idempotent requeue, non-idempotent `UNKNOWN` |
-| Worker re-registers with same ID | In-flight tasks from old incarnation fail | Epoch fencing plus idempotent requeue |
+| Worker never accepts | 15-second dispatch timeout; idempotent requeue (bounded), non-idempotent `TASK_UNKNOWN`; `DISPATCH` record is durable | Same, plus attempt history on the wire |
+| Worker stops heartbeating | After 10 seconds, idempotent tasks are requeued (bounded), non-idempotent tasks become `TASK_UNKNOWN` | Epoch fencing plus the same policy |
+| Worker re-registers with same ID | In-flight tasks are reconciled: idempotent requeue (bounded), non-idempotent `TASK_UNKNOWN` | Epoch fencing plus the same policy |
 | Task child crashes | Runner reports `FAILED` | Same |
 | Worker cannot start the task after `TASK_ACCEPT` | Runner exits without a `RESULT`; the task stays in flight while the worker keeps heartbeating | Worker reports `FAILED` for every start or wait failure |
-| Result WAL append fails | Task was already removed from in-flight; no ACK is sent, the worker does not retry, and the result is dropped until restart | Keep the task in flight until the `RESULT` record is durable; worker retries with backoff |
+| Result WAL append fails | No ACK; the task stays in flight and is reconciled after restart | Worker retries with backoff |
 | Task child hangs with heartbeat alive | Only task timeout stops it | Same, plus optional coordinator deadline |
-| Coordinator crashes | WAL replay; all unfinished tasks requeued | Snapshot plus idempotency-aware replay |
+| Coordinator crashes | Snapshot load plus idempotency-aware segment replay | Same, plus attempt history on the wire |
 | WAL append fails | Coordinator refuses ACK | Same, plus readiness signal and alert |
-| WAL reaches 4,096 tasks | Coordinator refuses to restart | Segment truncation removes the cliff |
+| WAL grows with lifetime tasks | Bounded: snapshots plus segment truncation | Same, plus published recovery/RSS metrics |
 | Metrics client stalls | Event loop blocks in `recv()` | Non-blocking metrics state machine |
-| Disk full | Append fails, ACK is refused | Same, plus health/readiness and runbook |
+| Disk full | Append fails, ACK is refused; readiness check warns below `IDR_MIN_FREE_BYTES` | Same, plus health/readiness endpoint and runbook |
 
 ## 11. Concurrency and memory model
 
@@ -364,8 +366,8 @@ is not safe for arbitrary hostile code.
 - All coordinator state is process-local and non-shared.
 - Task queues, in-flight entries, completed results, workers, and
   connections are fixed-size arrays.
-- The WAL is the only durable state.
-- Metrics counters are process-lifetime and reset on restart.
+- The WAL is the only durable state; snapshots are derived from it.
+- Metrics counters are restored from the snapshot on restart.
 
 This model is simple and easy to reason about. It is also why a blocking
 call in the event loop is a global stall, and why dynamic structures are
@@ -375,14 +377,15 @@ needed before increasing the fixed limits.
 
 | Constant | Value | Location |
 |---|---|---|
-| Queue capacity | 64 | `src/task_queue.h` |
+| Queue capacity | 512 | `src/task_queue.h` |
 | In-flight tasks | 64 | `src/coordinator_tasks.h` |
-| Completed results | 64 | `src/coordinator_tasks.h` |
+| Retained results | 100,000 / 7 days (env) | `src/recovery.c` |
 | Worker pool | 16 | `src/worker_pool.h` |
 | Worker registry | 32 | `src/worker_registry.h` |
 | Connection pool | 64 | `src/connection_pool.h` |
-| Recovery tasks | 4,096 | `src/recovery.c` |
-| WAL line | 8,192 bytes | `src/wal.c` |
+| WAL segment | 4 MiB (default, env) | `src/wal.h` |
+| Snapshot cadence | 10,000 records / 300 s | `src/wal.h` |
+| WAL record | 8,192 bytes | `src/wal.h` |
 | Protocol message | 4,096 bytes | `src/network_protocol.h` |
 | Command | 256 bytes | `src/task.h` |
 | Arguments | 16 x 128 bytes | `src/task.h` |
