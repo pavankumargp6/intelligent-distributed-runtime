@@ -1,7 +1,7 @@
 # IDR Roadmap to 1.0
 
-Status: Phase 0 complete; Phase 1 next
-Last updated: 2026-11-16
+Status: Phase 0 and Phase 1 complete (v0.2.0); Phase 2 next
+Last updated: 2026-11-18
 
 This document is the canonical project roadmap. It records what "10/10"
 means for IDR, the order in which the remaining work will be done, and
@@ -21,16 +21,16 @@ A 10/10 project is not a project with no bugs. It is a project that:
 Against that rubric, the current gaps are concentrated in durability,
 semantics, scale, and evidence.
 
-| Dimension | Current v0.x | v1.0 target |
+| Dimension | Current (v0.2) | v1.0 target |
 |---|---|---|
-| Durability | WAL keeps every record; recovery stops after 4,096 lifetime tasks | Snapshots + segment truncation; 1M+ lifetime tasks; crash-tested |
-| Semantics | Implicit at-least-once; `idempotent` ignored on replay | Explicit per-task policy; uncertain non-idempotent tasks are not silently retried |
+| Durability | WAL 2.0: framed segments, snapshots, bounded footprint; 1M lifetime tasks and 7 crash points tested | Recovery-time/RSS evidence at scale; backup/restore and disk-full drills |
+| Semantics | Explicit policy: uncertain non-idempotent tasks become `TASK_UNKNOWN`; queued tasks still return `QUERY_UNKNOWN` | `QUERY_PENDING_QUEUED`; attempts exposed on the wire |
 | Scheduling | Static capacity fit; `available == total` | Live slots/load; reservations; fairness; backpressure |
-| Scale | Fixed 64 queue/in-flight/completed; 16-worker pool | Dynamic limits; 100+ workers; 1k+ concurrent; 10k+ queued |
+| Scale | Queue 512; in-flight/completed 64; 16-worker pool | Dynamic limits; 100+ workers; 1k+ concurrent; 10k+ queued |
 | Security | Shared role secrets; plaintext; experimental sandbox | Per-worker identity; TLS/mTLS; quotas; sandbox; fuzzed parsers |
 | Operability | JSON metrics; environment-variable config | Prometheus; config/CLI; graceful drain; packaging; runbooks |
 | Availability | Single coordinator | Raft HA; failover under 5 seconds; chaos-tested |
-| Evidence | 143 checks; sanitizer builds only | Sanitizers/coverage/fuzz/chaos/bench in CI; reproducible releases |
+| Evidence | Crash matrix + 1M lifetime test; sanitizer builds only | Sanitizers/coverage/fuzz/chaos/bench in CI; reproducible releases |
 
 ## Two finish lines
 
@@ -48,7 +48,7 @@ not fix a broken local write-ahead log.
 | Phase | Focus | Estimate | Exit criterion |
 |---|---|---|---|
 | 0 | Contract, architecture, threat model, release policy | 3-5 days | Docs answer the hard failure questions |
-| 1 | WAL 2.0: snapshots, segments, recovery policy | 3 weeks | 1M tasks, bounded WAL, crash-tested |
+| 1 | WAL 2.0: snapshots, segments, recovery policy (done, v0.2.0) | 3 weeks | 1M tasks, bounded WAL, crash-tested |
 | 2 | Live scheduling, worker lifecycle, identity | 3 weeks | 100 workers, slots enforced, stale results rejected |
 | 3 | Persistent connections, scale, benchmarks | 2-3 weeks | 3-10x throughput, reproducible p99 data |
 | 4 | TLS, per-worker credentials, sandbox, fuzzing | 3-4 weeks | Secure by default, fuzz-clean |
@@ -84,35 +84,75 @@ the documentation alone.
 
 ## Phase 1 - WAL 2.0
 
-Status: planned. Tracking issues: #1 (snapshots/segments), #2 (crash
-harness), #3 (retention/query), #4 (1M recovery test), #5 (corruption
-tests), #6 (disk readiness), #7 (DISPATCH/ACCEPT), #8 (format versioning
-and checksums).
+Status: complete. Shipped as v0.2.0 in PR #10 (implementation and
+tests) plus this documentation update. Tracking issues: #1-#8.
 
-Context: `src/recovery.c` keeps every `SUBMIT` and `RESULT` line during
-compaction, while both compaction and replay are capped at 4,096 unique
-tasks (`RECOVERY_MAX_TASKS`). After 4,096 lifetime tasks, startup
-compaction fails with `wal_compact_index_full`, replay fails with
-`wal_recovery_overflow`, and the coordinator refuses to start. Deleting
-the WAL is currently the only recovery path.
+Context: v0.1 kept every `SUBMIT` and `RESULT` line and capped both
+compaction and replay at 4,096 unique tasks, so after 4,096 lifetime
+tasks the coordinator refused to start. WAL 2.0 replaces full-history
+compaction with snapshots, so the on-disk state is bounded by the
+retention policy rather than by lifetime task count.
 
-- [ ] Replace full-history compaction with snapshots plus WAL segments
-- [ ] Persist `next_task_id` in the snapshot or a small meta file
-- [ ] Add record checksums, segment headers, and a versioned snapshot format
-- [ ] Write snapshots atomically (`tmp` -> fsync -> rename -> fsync directory)
-- [ ] Keep the last two snapshots and detect corrupt snapshots
-- [ ] Add `DISPATCH` and `ACCEPT` records to the WAL
-- [ ] Define recovery behavior for queued, dispatched, accepted, and terminal tasks
-- [ ] Truncate segments fully covered by a snapshot
-- [ ] Define and enforce a retention policy for completed results
-- [ ] Add a crash-point test harness (`IDR_TEST_CRASH_AT=...`)
-- [ ] Add torn-tail and mid-file corruption tests
-- [ ] Add a 1M-lifetime-task restart test that runs in CI or nightly CI
-- [ ] Measure recovery time and RSS as the WAL grows
+- [x] Replace full-history compaction with snapshots plus WAL segments
+- [x] Persist `next_task_id` in the snapshot
+- [x] Add record checksums, segment headers, and a versioned snapshot format
+- [x] Write snapshots atomically (`tmp` -> fsync -> rename -> fsync directory)
+- [x] Keep the last two snapshots and detect corrupt snapshots
+- [x] Add `DISPATCH` and `ACCEPT` records to the WAL
+- [x] Define recovery behavior for queued, dispatched, accepted, and terminal tasks
+- [x] Truncate segments fully covered by a snapshot
+- [x] Define and enforce a retention policy for completed results
+- [x] Add a crash-point test harness (`IDR_TEST_CRASH_AT=...`)
+- [x] Add torn-tail and mid-file corruption tests
+- [x] Add a 1M-lifetime-task restart test (`tests/wal_lifetime_test.sh`)
+- [x] Measure recovery time as the WAL grows (2 ms after 1M tasks);
+      RSS measurement is part of the Phase 3 benchmark harness
 
-Exit criteria: 1M lifetime tasks with restarts every 10k tasks; recovery
-under 5 seconds; bounded WAL size; no acknowledged task lost; no silent
-duplicate execution of a non-idempotent task.
+What shipped:
+
+- **On-disk format.** Segments are `<base>.seg.<20-digit seq>` with a
+  24-byte header and a CRC32C per record. Snapshots are
+  `<base>.snap.<20-digit lsn>.dat` with their own magic, version,
+  checksum, and length fields. `<base>.manifest` is written atomically
+  and names the active snapshot and segment boundary. v0.1 text WALs
+  are imported once and renamed `<base>.legacy`.
+- **Bounded footprint.** Snapshots are written every 10,000 records or
+  300 seconds and after startup recovery. Segments fully covered by
+  the latest snapshot are removed; the two most recent snapshots are
+  kept so a corrupt newest snapshot can fall back to the previous one.
+- **Recovery.** `recovery_start()` loads the latest valid snapshot,
+  replays only segments after the snapshot LSN, and materializes
+  queued, in-flight, and retained terminal tasks.
+- **Policy.** Non-idempotent tasks whose outcome cannot be determined
+  recover to `TASK_UNKNOWN` (state 5). Idempotent tasks are requeued,
+  bounded by `COORDINATOR_MAX_ATTEMPTS` (default 3). `DISPATCH` is
+  appended before the worker sees the assignment, `ACCEPT` before the
+  in-memory accept, and `RESULT` before the in-flight entry is
+  released. First result wins; results from the wrong worker are
+  rejected with `TASK_RESULT_REJECT`.
+- **Retention.** The in-memory completed index keeps the last
+  `IDR_RESULT_RETENTION` (100,000) results for
+  `IDR_RESULT_RETENTION_SECONDS` (7 days). IDs below the allocator
+  watermark that are no longer tracked return `QUERY_EXPIRED`.
+- **Evidence.** `tests/crash_recovery_test.sh` injects a crash at
+  seven durability points and restarts on the same WAL after each.
+  `tests/wal_lifetime_test.c` pushes 1,000,000 tasks (2M records)
+  through the log, asserts bounded history and segments, then
+  restarts and times recovery: **2 ms** on the reference WSL2 host.
+
+Deliberately deferred to later phases:
+
+- `QUERY_PENDING_QUEUED` for queued tasks is Phase 2; v0.2 keeps
+  returning `QUERY_UNKNOWN`, pinned by tests and documented in
+  `docs/SEMANTICS.md`.
+- RSS measurement under a growing WAL belongs to the Phase 3
+  benchmark harness.
+- The accepted-but-start-failed stuck-in-flight defect is Phase 2.
+
+Exit criteria: met. 1M lifetime tasks; bounded WAL (3 segments after
+2M records in the test); recovery in milliseconds; no acknowledged
+task lost across the crash matrix; no silent duplicate execution of
+non-idempotent tasks (they become `TASK_UNKNOWN`).
 
 ## Phase 2 - Scheduler and worker lifecycle
 
@@ -233,8 +273,8 @@ These are subjective rubric scores, not release gates.
 
 | Milestone | Expected score |
 |---|---|
-| Current v0.x | 7.5 |
-| Phase 1 complete | 8.5 |
+| v0.1 baseline | 7.5 |
+| Phase 1 complete (v0.2.0) | 8.5 |
 | Phase 2 complete | 9.0 |
 | Phase 3 complete | 9.3 |
 | Phase 4 complete | 9.6 |

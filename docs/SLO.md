@@ -169,16 +169,19 @@ Phase 5 will expose Prometheus counters and histograms:
 
 ## 6. Known current gaps
 
-The following v0.x behaviors prevent the SLOs above from being met:
+The following v0.2 behaviors prevent the SLOs above from being met:
 
-- the 4,096-task WAL recovery cliff makes long-lived deployments
-  unrecoverable;
-- recovery can duplicate non-idempotent tasks;
 - the metrics endpoint can block the event loop;
-- queue and in-flight capacity are fixed at 64;
+- in-flight capacity is fixed at 64 and the worker pool at 16;
+- a worker that accepts a task but fails to start it leaves the task in
+  flight while the worker keeps heartbeating (Phase 2);
 - the benchmark harness uses one-second resolution for throughput;
 - there is no HA;
 - there is no TLS.
+
+WAL growth and duplicate non-idempotent execution are no longer listed:
+v0.2 bounds the log with snapshots and segments, and uncertain
+non-idempotent outcomes become `TASK_UNKNOWN` instead of being retried.
 
 These are tracked in `docs/ROADMAP.md`.
 

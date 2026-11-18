@@ -1,7 +1,7 @@
 # IDR Threat Model
 
-Status: Current v0.x, with v1.0 mitigations called out
-Last updated: 2026-11-15
+Status: Current for v0.2, with v1.0 mitigations called out
+Last updated: 2026-11-18
 
 This document describes the assets IDR protects, the trust boundaries it
 assumes, the adversaries it considers, and the gaps between the current
@@ -122,13 +122,13 @@ Boundaries:
 |---|---|---|---|---|
 | D1 | Exhaust the connection pool | 64 connections, 5-second idle timeout | An attacker can hold all 64 slots for 5 seconds per connection | Per-IP limits, authentication deadlines, epoll scaling |
 | D2 | Fill the replay cache | 8,192 entries; fail closed | One identity can consume the cache and reject valid traffic | Per-identity caches and rate limits |
-| D3 | Fill the task queue | 64 slots; `SUBMIT_REJECT` | No priority or per-client quota | Weighted fair queue and client quotas |
+| D3 | Fill the task queue | 512 slots; `SUBMIT_REJECT` | No priority or per-client quota | Weighted fair queue and client quotas |
 | D4 | Stall the coordinator via metrics | None | Blocking `recv()` on accepted metrics socket | Non-blocking metrics state machine or separate thread |
 | D5 | Fork-bomb a worker | Coordinator in-flight table caps tasks at 64 | Worker has no child cap and never waits for children | Worker child supervisor with a hard slot limit |
 | D6 | Submit oversized or expensive tasks | 4,096-byte messages, 256-byte commands, 16 arguments | No CPU, memory, or wall-clock quota at submission | Resource limits and admission control |
 | D7 | Slowloris the coordinator | Framing has a 4,096-byte maximum; idle connections expire in 5 seconds | No per-connection read deadline during framing | Per-state deadlines and authentication timeouts |
 | D8 | Exhaust worker memory or CPU | Optional per-task timeout | No cgroups or rlimits | cgroups v2 and rlimits in the sandbox |
-| D9 | Exhaust disk with WAL growth | None; WAL never shrinks | A long-running deployment eventually fills the disk and then hits the 4,096-task recovery cliff | Snapshots, segment truncation, disk-space readiness check |
+| D9 | Exhaust disk with WAL growth | Snapshots plus segment truncation keep the log bounded; appends fail closed below `IDR_MIN_FREE_BYTES` (16 MiB) | No per-client storage quota or long-term disk-growth alarm | Quotas, retention tuning, and disk-full runbook (Phase 5) |
 
 ### 5.6 Elevation of privilege
 

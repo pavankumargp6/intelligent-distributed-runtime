@@ -1,13 +1,13 @@
 # IDR Task Semantics and Delivery Guarantees
 
-Status: Draft for v1.0
-Last updated: 2026-11-15
+Status: Current for v0.2 (Phase 1), with v1.0 targets called out
+Last updated: 2026-11-18
 
 This document defines what a client, worker, and operator may assume
 about task submission, execution, results, and recovery.
 
 If the implementation and this document disagree, that is a bug. The
-document deliberately separates **current v0.x behavior** from **v1.0
+document deliberately separates **current v0.2 behavior** from **v1.0
 target behavior** so that gaps are visible rather than implied away.
 
 ## 1. Scope
@@ -57,15 +57,11 @@ The current `enum TaskState` values are:
 | 2 | `TASK_COMPLETED` | worker reported exit status 0 |
 | 3 | `TASK_FAILED` | worker reported nonzero, signal, worker loss, or dispatch timeout |
 | 4 | `TASK_TIMED_OUT` | worker killed the task after its execution timeout |
-
-v1.0 adds:
-
-| Value | Name | Meaning |
-|---|---|---|
 | 5 | `TASK_UNKNOWN` | the task may have run, but its outcome cannot be determined safely |
 
-`TASK_UNKNOWN` is a terminal state for the current attempt. It is not
-silently retried for a non-idempotent task.
+`TASK_UNKNOWN` was added in v0.2 (Phase 1). It is a terminal state for
+the current attempt. It is not silently retried for a non-idempotent
+task.
 
 ### 3.2 Coordinator view
 
@@ -73,11 +69,12 @@ The coordinator tracks a task in one of four places:
 
 1. **queued** - accepted and durable, waiting for a worker;
 2. **in-flight** - assigned to a worker, optionally accepted;
-3. **completed ring** - recent terminal results, currently 64 entries;
+3. **retained history** - recent terminal results, bounded by the
+   retention policy (100,000 results or 7 days in v0.2);
 4. **WAL only** - durable history that is not in memory.
 
 The in-memory model is deliberately small. The WAL is the durable
-record; the queues and rings are caches.
+record; the queues and history are caches.
 
 Target lifecycle:
 
@@ -99,9 +96,10 @@ QUEUED --dispatch--> DISPATCHED --accept--> ACCEPTED --start--> RUNNING
                                                                    queue closed)
 ```
 
-Current v0.x collapses `QUEUED`, `DISPATCHED`, and `ACCEPTED` into
-`TASK_CREATED` plus side tables. The wire state does not expose those
-intermediate states.
+v0.1 collapsed `QUEUED`, `DISPATCHED`, and `ACCEPTED` into
+`TASK_CREATED` plus side tables. v0.2 records `DISPATCH` and `ACCEPT`
+durably and uses them during recovery, but the wire state still reports
+all three non-terminal phases as `TASK_CREATED`.
 
 ## 4. Submission
 
@@ -148,8 +146,10 @@ Current behavior: an ID is allocated before the queue-full check. A
 rejected submission therefore consumes an ID. Clients must use the ID
 returned in `SUBMIT_ACK`, not assume the next ID.
 
-v1.0 target: persist `next_task_id` in the snapshot so IDs remain
-monotonic across WAL truncation and never collide with an older task.
+v0.2 persists `next_task_id` in the snapshot, so IDs remain monotonic
+across segment truncation and never collide with an older task. The
+v1.0 target here is not ID allocation but client-supplied idempotency
+keys for deduplication (section 4.3).
 
 ### 4.3 Acknowledgement contract
 
@@ -171,7 +171,7 @@ Therefore:
 
 A missing ACK is ambiguous. The task may have been durably recorded
 before the connection failed, or it may never have been recorded. A
-client that retries can create a second task. Current v0.x has no
+client that retries can create a second task. v0.2 has no
 submission deduplication.
 
 v1.0 target: an optional client-supplied idempotency key, scoped to a
@@ -205,15 +205,16 @@ The coordinator records the task in its in-flight table with:
 ### 5.2 Acceptance
 
 The worker sends `TASK_ACCEPT|<task_id>` after parsing the assignment
-and before forking the task process. Current v0.x does **not** include
-the worker ID or an epoch in this message.
+and before forking the task process. v0.2 does **not** include the
+worker ID or an epoch in this message; epoch fencing is Phase 2.
 
 If no `TASK_ACCEPT` arrives within `DISPATCH_TIMEOUT_SECONDS` (15
 seconds), the coordinator applies the dispatch-timeout policy:
 
-- idempotent task: requeue it;
-- non-idempotent task: mark it `FAILED` with exit status `-1` and write
-  a `RESULT` record.
+- idempotent task: requeue it while the attempt count stays below
+  `COORDINATOR_MAX_ATTEMPTS`; otherwise mark it `TASK_UNKNOWN`;
+- non-idempotent task: mark it `TASK_UNKNOWN` with exit status `-1`
+  and write a `RESULT` record before releasing the in-flight entry.
 
 ### 5.3 Execution
 
@@ -252,18 +253,16 @@ The worker reports one of:
 | execution timeout expired | `TASK_TIMED_OUT` | -1 |
 | worker could not start the task | `TASK_FAILED` | -1 |
 
-The coordinator writes a `RESULT` record and fsyncs it before sending
-`TASK_RESULT_ACK`. A result for an unknown task is acknowledged but
-ignored.
+The coordinator writes a `RESULT` record and fsyncs it before removing
+the task from the in-flight table and before sending
+`TASK_RESULT_ACK`. The first terminal result wins: later results are
+acknowledged and ignored, and a result from a worker other than the
+assigned worker is rejected with `TASK_RESULT_REJECT`.
 
-Current ordering defect: the coordinator removes the task from the
-in-flight table *before* appending the `RESULT` record. If the append
-fails, it sends no ACK, but the task is already gone from in-flight and
-was never added to the completed ring. The worker does not retry a
-failed result report, so the result is dropped. After a restart the
-`SUBMIT` has no `RESULT` and the task is treated as unfinished. v1.0
-must keep the task in flight until its result is durable and must retry
-result reporting.
+If the `RESULT` append fails, no ACK is sent and the in-flight entry is
+retained, so the result can be retried. The worker-side retry with
+backoff is a Phase 2 item; v0.2 relies on the reaper and restart
+reconciliation if the worker gives up.
 
 ### 5.5 Worker loss and reincarnation
 
@@ -271,18 +270,21 @@ A worker is marked unavailable after `WORKER_HEARTBEAT_TIMEOUT` (10
 seconds) without a heartbeat. The coordinator reaps that worker's
 in-flight tasks.
 
-Current v0.x behavior:
+v0.2 behavior:
 
-- all in-flight tasks for the lost worker are marked `FAILED` with exit
-  status -1, including idempotent tasks;
+- idempotent in-flight tasks are requeued while the attempt count stays
+  below `COORDINATOR_MAX_ATTEMPTS`; otherwise they become
+  `TASK_UNKNOWN`;
+- non-idempotent in-flight tasks become `TASK_UNKNOWN` with exit
+  status -1, because the command may have run;
 - if a worker re-registers with the same ID, in-flight tasks from the
-  previous incarnation are failed immediately.
+  previous incarnation are reconciled with the same policy.
 
 v1.0 target:
 
-- idempotent tasks are requeued;
-- non-idempotent tasks become `UNKNOWN` unless the coordinator can prove
-  the task never started;
+- epoch fencing so a reincarnated worker cannot act on an old
+  assignment;
+- attempt history exposed on the wire;
 - worker epochs prevent a stale worker from accepting or completing a
   task assigned to its replacement.
 
@@ -295,126 +297,135 @@ v1.0 target:
 | Response | Condition |
 |---|---|
 | `QUERY_PENDING|<task_id>` | task is currently in flight |
-| `QUERY_RESULT|<id>|<worker>|<exit>|<state>` | terminal result is in the completed ring |
-| `QUERY_UNKNOWN|<task_id>` | task is not in flight and not in the completed ring |
+| `QUERY_RESULT|<id>|<worker>|<exit>|<state>` | terminal result is retained in memory |
+| `QUERY_EXPIRED|<task_id>` | id is below `next_task_id` but no longer queued, in flight, or retained |
+| `QUERY_UNKNOWN|<task_id>` | task is not in flight and not retained; a queued task also returns this in v0.2 |
 
-Current gap: a task that is queued but not yet dispatched is not
-in-flight and is not in the completed ring, so `QUERY` returns
-`QUERY_UNKNOWN`. v1.0 target: queued tasks return `QUERY_PENDING`.
+v0.2 gap: a task that is queued but not yet dispatched is not
+in-flight and is not in the retained history, so `QUERY` returns
+`QUERY_UNKNOWN`. This behavior is pinned by tests. Phase 2 target:
+queued tasks return `QUERY_PENDING`.
 
-Current gap: the completed ring holds only the last 64 results. A
-terminal result older than that is `QUERY_UNKNOWN` even though the WAL
-still contains it. v1.0 target: query terminal results from a snapshot
-or an on-disk index, with an explicit retention policy.
+v0.2 retention: the retained history holds the last
+`IDR_RESULT_RETENTION` (default 100,000) terminal results within
+`IDR_RESULT_RETENTION_SECONDS` (default 7 days). A result older than
+that returns `QUERY_EXPIRED`, which is distinct from `QUERY_UNKNOWN`.
+`QUERY_EXPIRED` was added in v0.2.
 
 ### 6.2 Retention
 
-Current v0.x retains task results:
+Current v0.2 retains task results:
 
-- in the WAL: every record, until the WAL is manually removed or the
-  4,096-task recovery limit is hit;
-- in memory: the last 64 completed results;
-- in metrics: process-lifetime counters and averages, reset on restart.
+- in the WAL: records after the latest snapshot; segments fully
+  covered by a snapshot are removed, so the log is bounded by the
+  snapshot cadence and retention, not by lifetime task count;
+- in memory: the last `IDR_RESULT_RETENTION` results, for at most
+  `IDR_RESULT_RETENTION_SECONDS`;
+- in metrics: process-lifetime counters and averages, restored from
+  the snapshot on restart.
 
 v1.0 target:
 
-- terminal results are retained for a documented time or count;
-- expired results return a distinct `QUERY_EXPIRED` (or documented
-  equivalent), not an ambiguous `QUERY_UNKNOWN`;
-- the snapshot or an on-disk index supports efficient lookup;
-- retention is configurable and does not make the WAL unbounded.
+- move both knobs into the validated configuration file and CLI;
+- expose retention/expiry counters in metrics;
+- document backup and restore drills for snapshots and segments.
 
 ## 7. Crash recovery
 
-### 7.1 Current v0.x recovery
+### 7.1 Current v0.2 recovery (WAL 2.0)
 
 At startup the coordinator:
 
-1. compacts the WAL;
-2. opens it for append;
-3. replays every `SUBMIT` and `RESULT` record;
-4. rebuilds up to 4,096 submissions and 4,096 results in static arrays;
-5. tries to re-queue every `SUBMIT` that has no matching `RESULT`;
-6. sets `next_task_id` to the largest task ID seen plus one.
+1. loads `<base>.manifest`, which names the active snapshot and
+   segment boundary;
+2. loads the newest valid snapshot (falling back to the previous one
+   if the newest is corrupt) and restores its LSN, `next_task_id`,
+   counters, queued tasks, in-flight tasks, and retained results;
+3. replays only segments with records after the snapshot LSN;
+4. for each replayed task:
+   - `SUBMIT` only: queue it;
+   - `DISPATCH` or `ACCEPT` without `RESULT`: apply the idempotency
+     policy below;
+   - `RESULT`: terminal; deduplicate late results, first result wins;
+5. imports a v0.1 text WAL once (`<base>`) and renames it
+   `<base>.legacy`;
+6. writes a fresh snapshot so recovery starts from bounded state.
 
-Consequences:
+Policy for a task with a durable `DISPATCH` or `ACCEPT` but no
+`RESULT`:
 
-- every `SUBMIT` without a `RESULT` is treated as unfinished and is
-  retried, regardless of the `idempotent` flag;
-- a non-idempotent task can run twice if it executed before the crash
-  but its result was not durably recorded;
-- because the queue holds only 64 tasks, a crash with more than 64
-  unfinished tasks re-queues the first 64 it saw and leaves the rest in
-  the WAL only. They are not lost from disk, but they do not run until a
-  later restart re-reads the same records;
-- the WAL does not shrink for completed tasks;
-- after 4,096 lifetime tasks, recovery refuses to start.
+- `idempotent=true`: requeue with a new attempt, bounded by
+  `COORDINATOR_MAX_ATTEMPTS` (default 3). Recovery does not increment
+  the attempt counter; the coordinator increments it once at dispatch.
+- `idempotent=false`: terminal `TASK_UNKNOWN` (state 5). The task may
+  have run; it is not silently retried.
 
-The `idempotent` flag is honored for dispatch timeouts but not for
-crash recovery. This is a known inconsistency and the subject of
-ADR-002.
+A `SUBMIT` with no `DISPATCH` provably never reached a worker and is
+always queued.
+
+v0.1 behavior, for historical reference: it compacted the WAL,
+replayed every `SUBMIT` and `RESULT`, rebuilt up to 4,096 submissions
+and results in static arrays, requeued every submission without a
+result regardless of idempotency, capped the requeue at the 64-entry
+queue, and refused to start after 4,096 lifetime tasks.
 
 ### 7.2 Crash-point behavior
 
-The following table describes current behavior. "Ack" means the
-coordinator sent the relevant acknowledgement.
+"Ack" means the coordinator sent the relevant acknowledgement.
 
-| Crash point | Client-visible state | Recovery behavior |
+| Crash point | Client-visible state | v0.2 recovery behavior |
 |---|---|---|
 | Before `SUBMIT` fsync | no ACK | no task |
 | After `SUBMIT` fsync, before ACK | no ACK (ambiguous) | task is recovered and may run |
 | After ACK, before dispatch | task queued | task is requeued |
-| After dispatch, before accept | no result | task is requeued, even if non-idempotent |
-| After accept, before result | no result | task is requeued, even if non-idempotent |
-| After `RESULT` fsync, before ACK | result durable | task is terminal; duplicate result is ignored |
+| After `DISPATCH` fsync, before accept | no result | non-idempotent: `TASK_UNKNOWN`; idempotent: requeued (bounded) |
+| After `ACCEPT` fsync, before result | no result | non-idempotent: `TASK_UNKNOWN`; idempotent: requeued (bounded) |
+| After `RESULT` fsync, before ACK | result durable | task is terminal; duplicate result is ACKed and ignored |
 | After result ACK | terminal | task is terminal |
 
-"Requeued" in this table means the task is durable and is offered to the
-queue again. If the 64-entry queue is already full, it stays in the WAL
-and waits for a later restart; see section 7.1.
+If a requeue finds the 512-entry queue full, the task stays tracked in
+the in-flight table and is reconciled again; it is not dropped.
 
-The dangerous rows are **After dispatch, before accept** and **After
-accept, before result** for non-idempotent tasks: the task may already
-have run, but recovery cannot tell. The row **After SUBMIT fsync, before
-ACK** is ambiguous for the client, but the task provably never reached a
-worker. v1.0 narrows all three with `DISPATCH` and `ACCEPT` records and
-the policy in ADR-002.
+The dangerous rows are **After `DISPATCH` fsync, before accept** and
+**After `ACCEPT` fsync, before result** for non-idempotent tasks:
+recovery cannot prove whether the command ran, so v0.2 reports
+`TASK_UNKNOWN` instead of claiming failure or silently retrying.
+`tests/crash_recovery_test.sh` injects a crash at every point in this
+table, plus the snapshot and segment-removal steps, and restarts on
+the same WAL.
 
-### 7.3 Target recovery
+### 7.3 Target v1.0 refinements
 
-v1.0 recovery will:
+WAL 2.0 implements the snapshot and segment recovery pipeline from
+ADR-002. Remaining refinements for v1.0:
 
-1. load the latest valid snapshot;
-2. replay WAL segments after the snapshot LSN;
-3. for each task:
-   - `SUBMIT` only: queue it;
-   - `DISPATCH` or `ACCEPT` without `RESULT`: apply the idempotency
-     policy;
-   - `RESULT`: terminal, deduplicate late results;
-4. restore `next_task_id` from the snapshot;
-5. delete segments fully covered by the snapshot;
-6. keep the last two valid snapshots for rollback.
+1. expose attempt numbers and `TASK_UNKNOWN` history on the wire;
+2. return `QUERY_PENDING` for queued tasks (Phase 2);
+3. publish recovery time and RSS as benchmark output (Phase 3);
+4. add backup/restore and disk-full drills (Phase 5).
 
 ## 8. Delivery guarantees
 
-### 8.1 Current v0.x
+### 8.1 Current v0.2
 
 | Operation | Guarantee |
 |---|---|
 | Submission after `SUBMIT_ACK` | durable and queued |
 | Submission without `SUBMIT_ACK` | unknown; retry can duplicate |
-| Idempotent task on dispatch timeout | at-least-once |
-| Non-idempotent task on dispatch timeout | at-most-once |
-| Any task across a coordinator crash | at-least-once, including non-idempotent tasks |
+| Idempotent task on dispatch timeout | at-least-once, bounded attempts (default 3) |
+| Non-idempotent task on dispatch timeout | at-most-once; `TASK_UNKNOWN` |
+| Idempotent task across a coordinator crash | at-least-once, bounded attempts |
+| Non-idempotent task across a coordinator crash | at-most-once; `TASK_UNKNOWN` if it was dispatched or accepted |
 | Result after `TASK_RESULT_ACK` | durable terminal result |
-| Result without ACK | unknown; worker does not retry |
-| Result whose WAL append fails | dropped from memory; recovered as unfinished after restart |
-| Query for queued task | may return `QUERY_UNKNOWN` |
-| Query for old terminal task | may return `QUERY_UNKNOWN` after 64 results |
+| Result without ACK | unknown; the worker does not retry (Phase 2) |
+| Result whose WAL append fails | no ACK; the task stays in flight and is reconciled after restart |
+| Query for queued task | `QUERY_UNKNOWN` (v0.2 behavior; `QUERY_PENDING` is Phase 2) |
+| Query for aged-out terminal task | `QUERY_EXPIRED` |
 
-Current v0.x therefore does **not** provide exactly-once execution for
-non-idempotent tasks. It also does not provide a reliable
-"never duplicate" guarantee across coordinator crashes.
+v0.2 therefore does **not** provide exactly-once execution for
+non-idempotent tasks. It does provide a precise distinction between
+"failed" and "unknown": an uncertain non-idempotent outcome is never
+reported as `FAILED` and never silently retried.
 
 ### 8.2 Target v1.0
 
@@ -422,6 +433,10 @@ non-idempotent tasks. It also does not provide a reliable
 |---|---|---|
 | `idempotent=true` | at-least-once, bounded retries | retry with a new attempt |
 | `idempotent=false` | at-most-once | `TASK_UNKNOWN`, no automatic retry |
+
+v0.2 already implements this table for crash recovery and reaping.
+v1.0 adds attempt history on the wire and an operator-visible retry
+workflow.
 
 An operator may explicitly retry an `UNKNOWN` task. That is a new
 attempt and must be visible in the task history.
@@ -449,27 +464,32 @@ arrives.
 
 | Limit | Current value |
 |---|---|
-| Queue depth | 64 |
+| Queue depth | 512 |
 | In-flight tasks | 64 |
-| Completed results in memory | 64 |
+| Retained results in memory | 100,000 (7 days) |
 | Worker pool | 16 |
 | Worker registry | 32 |
 | Coordinator connections | 64 |
-| WAL recovery tasks | 4,096 |
-| WAL line size | 8,192 bytes |
+| WAL recovery tasks | snapshot-driven; no fixed lifetime cap |
+| WAL segment size | 4 MiB (default) |
+| Snapshot cadence | 10,000 records or 300 seconds |
+| WAL record size | 8,192 bytes |
 | Protocol message size | 4,096 bytes |
 | Replay cache | 8,192 MACs |
 
-These are v0.x demo-scale limits. v1.0 makes the queue, in-flight table,
-completed index, worker pool, and recovery limits configurable and
-removes the fixed-size assumptions from the hot path.
+These are still demo-scale limits except for durability, which is now
+bounded by snapshots and retention rather than lifetime task count.
+v1.0 makes the queue, in-flight table, worker pool, and retention
+configurable and removes the fixed-size assumptions from the hot path.
 
 ## 11. Versioning and compatibility
 
 - Authentication uses the `IDR-AUTH-V1` marker inside the MAC input.
-- The current WAL has no magic number, version, or per-record checksum.
-- v1.0 snapshots and WAL segments will carry a magic value, a format
-  version, and per-record checksums.
+- WAL 2.0 segments carry the `IDRS` magic, a format version, a
+  64-bit sequence, and a CRC32C per record.
+- Snapshots carry the `IDRSNP2` magic, a version, a payload checksum,
+  and length fields; the manifest is written atomically.
+- v0.1 text WALs are imported once and renamed `<base>.legacy`.
 - Protocol compatibility policy is defined in `docs/RELEASES.md`.
 
 ## 12. Non-goals
@@ -489,12 +509,18 @@ These are roadmap items or explicit non-goals, not implied guarantees.
 
 ## 13. Open decisions
 
-The following decisions are tracked in ADRs and must be resolved before
-v1.0:
+The following decisions are tracked in ADRs. Resolved in v0.2 (Phase 1):
 
-- default retry limit and backoff for idempotent tasks;
-- wire encoding and exact semantics of `TASK_UNKNOWN`;
-- default retention window for terminal results;
+- default retry limit for idempotent tasks: `COORDINATOR_MAX_ATTEMPTS`,
+  default 3;
+- wire encoding and semantics of `TASK_UNKNOWN`: wire state 5, terminal
+  for the current attempt, never silently retried;
+- default retention window for terminal results: 100,000 results or
+  7 days, configurable with `IDR_RESULT_RETENTION` and
+  `IDR_RESULT_RETENTION_SECONDS`.
+
+Still open before v1.0:
+
 - retention window and scope for client idempotency keys;
 - whether task attempts are exposed in the wire protocol;
 - whether `TASK_RUNNING` becomes a coordinator-visible state.

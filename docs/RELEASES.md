@@ -55,24 +55,46 @@ a breaking change regardless of the version number chosen.
 
 ## 2. Current state
 
-As of this document:
+As of this document (2026-11-18):
 
-- there are no git tags and no published releases;
+- `v0.2.0` is the first tagged release and marks Phase 1 (WAL 2.0)
+  complete. The `0.x` compatibility rules in section 3 apply from this
+  tag; the `1.x` promises start at `v1.0.0`;
 - the coordinator, worker, and clients are built from source with `make`;
 - there is no version string compiled into the binaries and no
-  `--version` flag;
-- the WAL has no format version or checksum, so the on-disk format is
-  explicitly unstable;
+  `--version` flag yet (Phase 5);
+- WAL 2.0 segments carry the `WLR2` record magic, a format version, and
+  a per-record CRC32C; snapshots carry `IDRSNP2` and a checksum. A v0.1
+  text WAL is imported once and renamed `<base>.legacy`;
 - CI builds and runs the test suite on `ubuntu-latest` only.
 
-Treat every commit on `main` as an unreleased development build. Do not
-assume any compatibility promise for untagged commits.
+Commits after `v0.2.0` on `main` are unreleased development builds until
+the next tag.
 
-The first tagged release will be `v0.2.0`, after Phase 1 (WAL 2.0) lands.
-The version is `0.2.0` rather than `0.1.0` because the WAL and delivery
-semantics change incompatibly from the current untagged state. Adopting
-`v0.1.0` retroactively for an untagged commit would imply a stable
-baseline that does not exist.
+`v0.2.0` supersedes the untagged v0.1 state. The version is `0.2.0`
+rather than `0.1.0` because the WAL and delivery semantics changed
+incompatibly from that baseline. The next planned tag is `v0.3.0`,
+after Phase 2.
+
+### 2.1 v0.2.0 release notes (Phase 1)
+
+Highlights:
+
+- framed, CRC-protected WAL segments with snapshots and a crash-safe
+  manifest; the 4,096-lifetime-task recovery cliff is gone;
+- `TASK_UNKNOWN` (state 5) for uncertain non-idempotent outcomes, with
+  bounded requeue for idempotent tasks;
+- durable `DISPATCH` and `ACCEPT` ordering, first-result-wins, and
+  worker-mismatch rejection;
+- `QUERY_EXPIRED` for aged-out results; retention defaults to 100,000
+  results or 7 days;
+- 1,000,000-task lifetime test with a 2 ms restart; seven injected
+  crash points covered by `tests/crash_recovery_test.sh`.
+
+Operator action: none required for a clean start. A v0.1 text WAL is
+imported automatically on first start and archived as `<base>.legacy`.
+Upgrade the coordinator before the workers; the wire protocol is
+unchanged in this release.
 
 ## 3. Compatibility promises
 
@@ -108,7 +130,7 @@ configuration surface. It must ship with:
 
 Mixed-version operation is supported only where the release notes say so.
 
-Current v0.x has no protocol version negotiation beyond the
+v0.2 has no protocol version negotiation beyond the
 `IDR-AUTH-V1` marker inside the MAC input. A coordinator and worker
 built from different commits may fail in confusing ways. Until explicit
 negotiation exists, upgrade the coordinator, workers, and clients
@@ -220,8 +242,8 @@ git push origin v0.2.0
 
 | Version | Content | Status |
 |---|---|---|
-| untagged `main` | Pre-Phase 0 | Current baseline, not a release |
-| v0.2.0 | Phase 0 docs, Phase 1 WAL 2.0, delivery semantics | Planned |
+| untagged v0.1 | Pre-Phase 0 / v0.1 WAL | Historical baseline, no tag |
+| v0.2.0 | Phase 0 docs, Phase 1 WAL 2.0, delivery semantics | Released |
 | v0.3.0 | Phase 2 scheduler, worker identity, fencing | Planned |
 | v0.4.0 | Phase 3 connections, scale, benchmark harness | Planned |
 | v0.5.0 | Phase 4 TLS, per-worker credentials, fuzzing | Planned |
@@ -237,8 +259,8 @@ criteria in `docs/ROADMAP.md` are met.
 Documents that describe behavior carry one of these status lines:
 
 - **Current** - describes the code on `main` as of the last update;
-- **Current v0.x, with v1.0 targets called out** - describes the code and
-  marks intended changes;
+- **Current v0.x (or a named version), with v1.0 targets called out** -
+  describes the code and marks intended changes;
 - **Draft for v1.0** or **Proposed for v1.0** - describes intent, not
   implemented behavior;
 - **Policy for v0.2.0 onward** - this document.
@@ -276,8 +298,9 @@ These are unresolved and must be decided before `v1.0.0`:
 - the exact support window for the previous MAJOR release;
 - whether the wire protocol gets an explicit version field in addition
   to `IDR-AUTH-V1`;
-- whether WAL and snapshot formats are versioned independently of the
-  project version;
+- ~~whether WAL and snapshot formats are versioned independently of the
+  project version~~ (resolved in v0.2: the segment and snapshot headers
+  carry their own format versions);
 - whether binary artifacts are published for multiple distributions or
   source-only;
 - the signing mechanism and key custody model.
