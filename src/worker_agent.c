@@ -13,26 +13,23 @@
 #include "task.h"
 #include "task_executor.h"
 #include "log.h"
+#include "worker_registry.h"
 
 #define RUNTIME_ADDRESS "127.0.0.1"
 #define DEFAULT_AGENT_INTERVAL_SECONDS 0
 #define RETRY_INTERVAL_SECONDS 3
 
 /*
- * Configurable agent cycle interval. Defaults to 3 seconds,
- * matching the original hardcoded value. Setting the
- * IDR_AGENT_INTERVAL_SECONDS environment variable to 0 (or a
- * fractional value) reduces the delay between task poll
- * cycles.
- *
- * This is a benchmark affordance: it lets the performance
- * harness observe the runtime's actual per-task overhead
- * instead of waiting on the default 3-second idle timer. It
- * does not change the worker's architecture.
- *
- * Values outside [0, 3600] are rejected with a warning and the
- * default is used.
+ * Configurable agent cycle interval. The default is 0, so the
+ * worker spin-polls the coordinator for tasks as fast as the
+ * event loop allows. Set IDR_AGENT_INTERVAL_SECONDS to a positive
+ * value to throttle the poll rate (the scheduler fairness test uses
+ * 1 s so two workers split a batch deterministically).
  */
+
+static double parse_agent_interval(void);
+static void sleep_seconds(double seconds);
+
 static double parse_agent_interval(void)
 {
     const char *env = getenv("IDR_AGENT_INTERVAL_SECONDS");
@@ -181,6 +178,30 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /*
+     * The worker agent forks one child per task and never waits
+     * on them (SIGCHLD is SIG_IGN, so the kernel reaps them). The
+     * running count is therefore the number of children that have
+     * been forked but whose results have not yet been reported.
+     * It is reported to the coordinator on every heartbeat so the
+     * coordinator can enforce per-worker capacity.
+     */
+    int running_tasks = 0;
+
+    int max_running_tasks = DEFAULT_WORKER_MAX_TASKS;
+
+    const char *env_max = getenv("IDR_WORKER_MAX_TASKS");
+    if (env_max != NULL && env_max[0] != '\0')
+    {
+        char *end = NULL;
+        long parsed = strtol(env_max, &end, 10);
+        if (end != env_max && end != NULL && *end == '\0' &&
+            parsed > 0)
+        {
+            max_running_tasks = (int)parsed;
+        }
+    }
+
     double agent_interval = parse_agent_interval();
 
     printf("\n========================================\n");
@@ -196,6 +217,7 @@ int main(int argc, char *argv[])
     printf("Available Memory : %ld MB\n",
            worker.resources.available_memory_mb);
     printf("Cycle interval   : %.3f s\n", agent_interval);
+    printf("Max tasks        : %d\n", max_running_tasks);
     printf("========================================\n");
 
     int registered = 0;
@@ -208,8 +230,10 @@ int main(int argc, char *argv[])
                      "Registering worker %d with runtime...",
                      worker.id);
 
-            if (register_worker_with_runtime(&worker,
-                                             RUNTIME_ADDRESS))
+            if (register_worker_with_runtime_with_load(&worker,
+                                             RUNTIME_ADDRESS,
+                                             running_tasks,
+                                             max_running_tasks))
             {
                 registered = 1;
                 log_info("worker_registered",
@@ -231,11 +255,18 @@ int main(int argc, char *argv[])
                   "Sending heartbeat for worker %d...",
                   worker.id);
 
-        if (!send_worker_heartbeat(&worker, RUNTIME_ADDRESS))
+        if (!send_worker_heartbeat_with_load(&worker,
+                                              RUNTIME_ADDRESS,
+                                              running_tasks,
+                                              max_running_tasks))
         {
             log_warn("heartbeat_failed",
-                     "Heartbeat failed. Will attempt registration again.");
-            registered = 0;
+                     "Heartbeat failed. Will retry on next cycle.");
+            /* Do not re-register immediately: the failure may be
+             * transient (auth replay on the ACK). The next loop
+             * iteration will retry the heartbeat with a fresh
+             * timestamp. */
+            sleep_seconds(1.0);
             continue;
         }
 
@@ -277,11 +308,14 @@ int main(int argc, char *argv[])
             continue;
         }
 
+        running_tasks++;
+
         pid_t child = fork();
 
         if (child < 0)
         {
             log_error("fork_failed", "fork: %s", strerror(errno));
+            running_tasks--;
             continue;
         }
 

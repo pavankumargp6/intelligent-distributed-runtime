@@ -33,6 +33,34 @@ int parse_worker_registration(
 );
 
 /*
+ * Build a registration message with load fields.
+ *
+ * Format:
+ *
+ * REGISTER|worker_id|cpu|memory|running_tasks|max_running_tasks
+ */
+int build_worker_registration_with_load(
+    const struct Worker *worker,
+    int running_tasks,
+    int max_running_tasks,
+    char *buffer,
+    int buffer_size
+);
+
+/*
+ * Parse a registration message with load fields.
+ *
+ * Returns 1 on success.
+ * Returns 0 on invalid input.
+ */
+int parse_worker_registration_with_load(
+    const char *message,
+    struct Worker *worker,
+    int *running_tasks,
+    int *max_running_tasks
+);
+
+/*
  * Build a heartbeat message.
  *
  * Format:
@@ -56,6 +84,37 @@ int build_worker_heartbeat(
 int parse_worker_heartbeat(
     const char *message,
     int *worker_id
+);
+
+/*
+ * Build a heartbeat message with load fields.
+ *
+ * Format:
+ *
+ * HEARTBEAT|worker_id|running_tasks|max_running_tasks
+ */
+int build_worker_heartbeat_with_load(
+    const struct Worker *worker,
+    int running_tasks,
+    int max_running_tasks,
+    char *buffer,
+    int buffer_size
+);
+
+/*
+ * Parse a heartbeat message with load fields.
+ *
+ * Returns the worker ID, running task count, and max running
+ * tasks through the output parameters.
+ *
+ * Returns 1 on success.
+ * Returns 0 on invalid input.
+ */
+int parse_worker_heartbeat_with_load(
+    const char *message,
+    int *worker_id,
+    int *running_tasks,
+    int *max_running_tasks
 );
 
 #endif

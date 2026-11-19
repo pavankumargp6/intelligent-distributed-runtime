@@ -167,24 +167,48 @@ static int handle_worker_message(
     if (strncmp(dispatch_msg, "REGISTER|", 9) == 0)
     {
         struct Worker worker = {0};
+        int running_tasks = 0;
+        int max_running_tasks = DEFAULT_WORKER_MAX_TASKS;
 
-        if (!parse_worker_registration(dispatch_msg, &worker))
+        if (!parse_worker_registration_with_load(dispatch_msg,
+                                                 &worker,
+                                                 &running_tasks,
+                                                 &max_running_tasks))
         {
-            log_warn("registration_invalid",
-                     "Invalid worker registration.");
-            pool_send_message(conn, "REGISTER_REJECT");
-            return 0;
+            /* Backward compatibility: try the old format without load fields. */
+            if (!parse_worker_registration(dispatch_msg, &worker))
+            {
+                log_warn("registration_invalid",
+                         "Invalid worker registration.");
+                pool_send_message(conn, "REGISTER_REJECT");
+                return 0;
+            }
         }
 
         log_info("worker_registration",
-                 "Worker registration: id=%d cpu=%.2f%% mem_mb=%ld",
+                 "Worker registration: id=%d cpu=%.2f%% mem_mb=%ld running=%d max=%d",
                  worker.id,
                  worker.resources.total_cpu_percent,
-                 worker.resources.total_memory_mb);
-        /* Milestone H.2: If this worker was already registered, it
-         * means it crashed and restarted. Any tasks it was running
-         * are lost and must be failed immediately. */
-        if (find_registered_worker(&runtime->registry, worker.id) != NULL)
+                 worker.resources.total_memory_mb,
+                 running_tasks,
+                 max_running_tasks);
+        /* Milestone H.2: If this worker was already registered,
+         * it means the old instance is gone (crashed or restarted).
+         * Any tasks it was running are lost and must be failed
+         * immediately.
+         *
+         * Note: this runs even if the old entry is still ACTIVE,
+         * because a re-registration is definitive proof the old
+         * process is gone. The heartbeat timeout (10s) handles
+         * workers that disappear without re-registering. */
+        int existing_index = -1;
+        for (int i = 0; i < runtime->registry.count; i++) {
+            if (runtime->registry.workers[i].worker.id == worker.id) {
+                existing_index = i;
+                break;
+            }
+        }
+        if (existing_index >= 0)
         {
             int reaped = coordinator_reap_worker_tasks(runtime, table, worker.id);
             if (reaped > 0)
@@ -205,6 +229,16 @@ static int handle_worker_message(
             return 0;
         }
 
+        /*
+         * Update the coordinator's admission-control view of this
+         * worker with the running count and capacity reported by
+         * the worker at registration time.
+         */
+        worker_update_load(&runtime->registry,
+                           worker.id,
+                           running_tasks,
+                           max_running_tasks);
+
         log_info("worker_registered",
                  "Worker registered with runtime. ✅");
 
@@ -222,20 +256,35 @@ static int handle_worker_message(
     if (strncmp(dispatch_msg, "HEARTBEAT|", 10) == 0)
     {
         int worker_id;
+        int running_tasks;
+        int max_running_tasks;
 
-        if (!parse_worker_heartbeat(dispatch_msg, &worker_id))
+        if (!parse_worker_heartbeat_with_load(dispatch_msg,
+                                              &worker_id,
+                                              &running_tasks,
+                                              &max_running_tasks))
         {
-            log_warn("heartbeat_invalid",
-                     "Invalid heartbeat message.");
-            pool_send_message(conn, "HEARTBEAT_REJECT");
-            return 0;
+            /* Backward compatibility: try the old format without load fields. */
+            if (!parse_worker_heartbeat(dispatch_msg, &worker_id))
+            {
+                log_warn("heartbeat_invalid",
+                         "Invalid heartbeat message.");
+                pool_send_message(conn, "HEARTBEAT_REJECT");
+                return 0;
+            }
+            /* Old format: assume running=0, max=default. */
+            running_tasks = 0;
+            max_running_tasks = DEFAULT_WORKER_MAX_TASKS;
         }
 
         log_debug("heartbeat_received",
                   "Heartbeat received from worker %d.",
                   worker_id);
 
-        if (!update_worker_heartbeat(&runtime->registry, worker_id))
+        if (!worker_update_load(&runtime->registry,
+                                worker_id,
+                                running_tasks,
+                                max_running_tasks))
         {
             log_warn("heartbeat_unknown_worker",
                      "Unknown worker: %d",
