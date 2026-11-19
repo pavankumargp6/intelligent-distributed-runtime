@@ -6,6 +6,7 @@
 #   2. STATUS on empty runtime -> workers=0, queue=0, submitted=0.
 #   3. Submit a task with no worker running.
 #   4. STATUS again -> submitted=1, queue=1 (task waiting, no worker).
+#   5. QUERY the queued task -> QUERY_PENDING (not QUERY_UNKNOWN).
 
 set -u
 export IDR_WORKER_SECRET="idr-test-worker-secret-do-not-use-in-production"
@@ -35,6 +36,7 @@ cd "$(dirname "$0")/.."
 COORD_BIN=/tmp/idr_coord_status
 CLIENT_BIN=/tmp/idr_client_status_submit
 STATUS_BIN=/tmp/idr_client_status
+QUERY_BIN=/tmp/idr_client_status_query
 
 COORD_LOG=/tmp/idr_coord_status.log
 
@@ -64,6 +66,12 @@ gcc -Wall -Wextra -Isrc \
     tests/client_status.c src/network_protocol.c \
     src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$STATUS_BIN" || exit 1
+
+echo "===== Building query client ====="
+gcc -Wall -Wextra -Isrc \
+    tests/client_query.c src/network_protocol.c src/wire_fields.c \
+    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
+    -o "$QUERY_BIN" || exit 1
 
 : > "$COORD_LOG"
 
@@ -116,6 +124,18 @@ if ! printf '%s' "$OUT2" | grep -q 'queue=1'; then
     echo "FAIL: expected queue=1 (no worker to dispatch to)"
     exit 1
 fi
+
+echo "===== QUERY for the queued task ====="
+Q=$("$QUERY_BIN" 1 2>/dev/null | grep -o 'QUERY_.*' | head -1)
+echo "$Q"
+
+case "$Q" in
+    QUERY_PENDING\|1) ;;
+    *)
+        echo "FAIL: queued task 1 should be QUERY_PENDING|1, got: $Q"
+        exit 1
+        ;;
+esac
 
 echo
 echo "===== Coordinator log ====="

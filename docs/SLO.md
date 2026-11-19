@@ -173,8 +173,9 @@ The following v0.2 behaviors prevent the SLOs above from being met:
 
 - the metrics endpoint can block the event loop;
 - in-flight capacity is fixed at 64 and the worker pool at 16;
-- a worker that accepts a task but fails to start it leaves the task in
-  flight while the worker keeps heartbeating (Phase 2);
+- a worker that accepts a task but cannot report a start failure (for
+  example, the coordinator is unreachable) leaves the task in flight
+  while the worker keeps heartbeating;
 - the benchmark harness uses one-second resolution for throughput;
 - there is no HA;
 - there is no TLS.

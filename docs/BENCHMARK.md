@@ -42,8 +42,9 @@ round trip to the coordinator.
   all run on the same host.
 - **Coordinator**: single-threaded, `poll()`-based.
 - **Worker**: one TCP connection per operation; configurable
-  cycle interval (`IDR_AGENT_INTERVAL_SECONDS`, default 3s,
-  0s for benchmark spin).
+  cycle interval (`IDR_AGENT_INTERVAL_SECONDS`, default 0s, so the
+  worker spin-polls; the 3s interval used in the F-2 comparison is
+  set explicitly).
 
 ## 3. Methodology
 
@@ -193,7 +194,7 @@ connections would reduce the churn to approximately one
 connection per worker lifetime.
 
 **Persistent connections are not worth implementing at the
-default 3-second interval.** At interval=3, the polling rate
+3-second interval used here.** At interval=3, the polling rate
 is ~2.7 connections per second across 8 workers. The client
 submission traffic and task-dispatch traffic dominate by a
 wide margin. The current architecture is adequate.

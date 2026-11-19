@@ -322,6 +322,9 @@ test:
 	@echo "===== status_test.sh ====="
 	bash tests/status_test.sh
 	@echo ""
+	@echo "===== worker_start_failure_test.sh ====="
+	bash tests/worker_start_failure_test.sh
+	@echo ""
 	@echo "===== dispatch_timeout_test.sh ====="
 	bash tests/dispatch_timeout_test.sh
 	@echo ""

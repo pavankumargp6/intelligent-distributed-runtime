@@ -71,7 +71,9 @@ As of this document (2026-11-19):
 - CI builds and runs the test suite on `ubuntu-latest` only.
 
 Commits after `v0.2.2` on `main` are unreleased development builds until
-the next tag.
+the next tag. Phase 2 work on `main` targets `v0.3.0`; the docs mark
+behavior that is only in that unreleased line (for example
+`QUERY_PENDING` for queued tasks) as v0.3.0.
 
 `v0.2.0` supersedes the untagged v0.1 state. The version is `0.2.0`
 rather than `0.1.0` because the WAL and delivery semantics changed
