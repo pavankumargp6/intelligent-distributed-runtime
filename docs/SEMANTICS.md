@@ -407,8 +407,9 @@ ADR-002. Remaining refinements for v1.0:
 2. return `QUERY_PENDING` for queued tasks (Phase 2);
 3. add backup/restore and disk-full drills (Phase 5).
 
-Recovery time and RSS are measured in the lifetime test: 2 ms and
-3.7 MB peak RSS after 1,000,000 tasks on the reference host.
+Recovery time and RSS are measured in the lifetime test: about 1 ms
+and 42 MB peak RSS across 100 in-process restarts after 1,000,000
+tasks on the reference host. See `docs/BENCHMARK.md` section 9.
 
 ## 8. Delivery guarantees
 

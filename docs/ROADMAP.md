@@ -1,6 +1,6 @@
 # IDR Roadmap to 1.0
 
-Status: Phase 0 and Phase 1 complete (v0.2.1); Phase 2 next
+Status: Phase 0 and Phase 1 complete (v0.2.2); Phase 2 next
 Last updated: 2026-11-18
 
 This document is the canonical project roadmap. It records what "10/10"
@@ -23,7 +23,7 @@ semantics, scale, and evidence.
 
 | Dimension | Current (v0.2) | v1.0 target |
 |---|---|---|
-| Durability | WAL 2.0: framed segments, snapshots, bounded footprint; 1M lifetime tasks, 3.7 MB RSS, 7 crash points, and corruption/missing-segment tests | Backup/restore and disk-full drills; chaos runs |
+| Durability | WAL 2.0: framed segments, snapshots, bounded footprint; 1M lifetime tasks with 100 restarts, 42 MB peak RSS, 7 crash points, and corruption/missing-segment tests | Backup/restore and disk-full drills; chaos runs |
 | Semantics | Explicit policy: uncertain non-idempotent tasks become `TASK_UNKNOWN`; queued tasks still return `QUERY_UNKNOWN` | `QUERY_PENDING_QUEUED`; attempts exposed on the wire |
 | Scheduling | Static capacity fit; `available == total` | Live slots/load; reservations; fairness; backpressure |
 | Scale | Queue 512; in-flight/completed 64; 16-worker pool | Dynamic limits; 100+ workers; 1k+ concurrent; 10k+ queued |
@@ -85,8 +85,8 @@ the documentation alone.
 ## Phase 1 - WAL 2.0
 
 Status: complete. Shipped as v0.2.0 in PR #10 (implementation and
-tests), documented in PR #11, and hardened in v0.2.1. Tracking
-issues: #1-#8.
+tests), documented in PR #11, hardened in v0.2.1, and closed out with
+the periodic-restart benchmark in v0.2.2. Tracking issues: #1-#8.
 
 Context: v0.1 kept every `SUBMIT` and `RESULT` line and capped both
 compaction and replay at 4,096 unique tasks, so after 4,096 lifetime
@@ -108,8 +108,11 @@ retention policy rather than by lifetime task count.
       corruption tests
 - [x] Refuse recovery when a segment required by the snapshot is missing
 - [x] Add a 1M-lifetime-task restart test (`tests/wal_lifetime_test.sh`)
-- [x] Measure recovery time and RSS as the WAL grows (2 ms and 3.7 MB
-      RSS after 1M tasks; the test asserts the 256 MB bound)
+- [x] Restart every 10,000 tasks and verify the queue, counters,
+      retained history, and `next_task_id` after each restart
+- [x] Measure recovery time, RSS, snapshot bytes, and WAL bytes as the
+      WAL grows (1 ms and 42 MB peak RSS across 100 in-process restarts
+      after 1M tasks; the test asserts the 256 MB bound)
 
 What shipped:
 
@@ -146,9 +149,11 @@ What shipped:
   tails, mid-file CRC corruption, unknown format versions, corrupt
   manifests, snapshot fallback, and missing segments both inside and
   beyond the snapshot boundary. `tests/wal_lifetime_test.c` pushes
-  1,000,000 tasks (2M records) through the log, asserts bounded history
-  and segments, then restarts and times recovery: **2 ms** and
-  **3.7 MB peak RSS** on the reference WSL2 host.
+  1,000,000 tasks (2M records) through the log, restarts the coordinator
+  every 10,000 tasks (100 restarts), and asserts bounded history and
+  segments. The timed final restart recovers in **1 ms**; peak RSS is
+  **42 MB** across the 100 in-process restarts (3.7 MB for a single
+  restart). Raw data and host details are in `docs/BENCHMARK.md`.
 
 Deliberately deferred to later phases:
 
@@ -157,11 +162,12 @@ Deliberately deferred to later phases:
   `docs/SEMANTICS.md`.
 - The accepted-but-start-failed stuck-in-flight defect is Phase 2.
 
-Exit criteria: met. 1M lifetime tasks; bounded WAL (3 segments after
-2M records in the test); recovery in milliseconds with 3.7 MB peak RSS;
-no acknowledged task lost across the crash matrix or the missing-segment
-tests; no silent duplicate execution of non-idempotent tasks (they
-become `TASK_UNKNOWN`).
+Exit criteria: met. 1M lifetime tasks with a restart every 10,000
+tasks; bounded WAL (3 segments and 1.9 MB peak between snapshots after
+2M records in the test); recovery in about 1 ms with 42 MB peak RSS
+across 100 in-process restarts; no acknowledged task lost across the
+crash matrix or the missing-segment tests; no silent duplicate
+execution of non-idempotent tasks (they become `TASK_UNKNOWN`).
 
 ## Phase 2 - Scheduler and worker lifecycle
 

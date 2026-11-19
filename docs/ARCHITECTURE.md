@@ -289,8 +289,9 @@ is retired; ADR-001 records the replacement.
 6. restores counters and `next_task_id`, then writes a fresh snapshot.
 
 Recovery time is bounded by the snapshot cadence rather than lifetime
-task count: `tests/wal_lifetime_test.c` measures 2 ms and 3.7 MB peak
-RSS after 1,000,000 tasks on the reference WSL2 host.
+task count: `tests/wal_lifetime_test.c` restarts every 10,000 tasks and
+measures about 1 ms recovery with 42 MB peak RSS across 100 in-process
+restarts after 1,000,000 tasks on the reference WSL2 host.
 
 ## 8. Authentication and authorization
 
@@ -367,7 +368,7 @@ is not safe for arbitrary hostile code.
 | Task child hangs with heartbeat alive | Only task timeout stops it | Same, plus optional coordinator deadline |
 | Coordinator crashes | Snapshot load plus idempotency-aware segment replay | Same, plus attempt history on the wire |
 | WAL append fails | Coordinator refuses ACK | Same, plus readiness signal and alert |
-| WAL grows with lifetime tasks | Bounded: snapshots plus segment truncation; 2 ms recovery and 3.7 MB RSS after 1M tasks | Same, plus alerting on unexpected growth |
+| WAL grows with lifetime tasks | Bounded: snapshots plus segment truncation; 1 ms recovery and 42 MB RSS (100 in-process restarts) after 1M tasks | Same, plus alerting on unexpected growth |
 | Metrics client stalls | Event loop blocks in `recv()` | Non-blocking metrics state machine |
 | Disk full | Append fails, ACK is refused; readiness check warns below `IDR_MIN_FREE_BYTES` | Same, plus health/readiness endpoint and runbook |
 

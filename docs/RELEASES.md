@@ -55,12 +55,13 @@ a breaking change regardless of the version number chosen.
 
 ## 2. Current state
 
-As of this document (2026-11-18):
+As of this document (2026-11-19):
 
-- `v0.2.1` is the current release. `v0.2.0` was the first tag and
-  marked Phase 1 (WAL 2.0) complete; `v0.2.1` hardens recovery. The
-  `0.x` compatibility rules in section 3 apply from `v0.2.0`; the
-  `1.x` promises start at `v1.0.0`;
+- `v0.2.2` is the current release. `v0.2.0` was the first tag and
+  marked Phase 1 (WAL 2.0) complete; `v0.2.1` hardened recovery; and
+  `v0.2.2` closes out the Phase 1 scale evidence. The `0.x`
+  compatibility rules in section 3 apply from `v0.2.0`; the `1.x`
+  promises start at `v1.0.0`;
 - the coordinator, worker, and clients are built from source with `make`;
 - there is no version string compiled into the binaries and no
   `--version` flag yet (Phase 5);
@@ -69,7 +70,7 @@ As of this document (2026-11-18):
   text WAL is imported once and renamed `<base>.legacy`;
 - CI builds and runs the test suite on `ubuntu-latest` only.
 
-Commits after `v0.2.1` on `main` are unreleased development builds until
+Commits after `v0.2.2` on `main` are unreleased development builds until
 the next tag.
 
 `v0.2.0` supersedes the untagged v0.1 state. The version is `0.2.0`
@@ -116,6 +117,27 @@ Highlights:
 - new tests: unknown segment format version, corrupt manifest, missing
   covered segment, missing uncovered segment. The recovery snapshot
   suite is 49 checks; the WAL suite is 47.
+
+Operator action: none. On-disk formats and the wire protocol are
+unchanged from v0.2.0.
+
+### 2.3 v0.2.2 release notes (Phase 1 scale evidence)
+
+Highlights:
+
+- the lifetime test now restarts the coordinator every 10,000 tasks
+  (100 restarts at the default 1,000,000 tasks) and verifies the queue,
+  completed counter, retained history, and `next_task_id` after every
+  restart;
+- the test measures and bounds snapshot size (< 16 MiB; 117 KiB
+  measured), peak WAL bytes between snapshots (< 64 MiB; 1.9 MiB
+  measured), segment count, recovery wall time (< 5 s; 0.001 s
+  measured), and peak RSS (< 256 MiB; 42 MB measured across the 100
+  in-process restarts);
+- `docs/BENCHMARK.md` section 9 publishes the raw output, derived
+  measurements, and reference-host details;
+- no production code changed. This release is test and documentation
+  evidence only.
 
 Operator action: none. On-disk formats and the wire protocol are
 unchanged from v0.2.0.
@@ -269,6 +291,7 @@ git push origin v0.2.0
 | untagged v0.1 | Pre-Phase 0 / v0.1 WAL | Historical baseline, no tag |
 | v0.2.0 | Phase 0 docs, Phase 1 WAL 2.0, delivery semantics | Released |
 | v0.2.1 | Recovery hardening: segment-chain validation, corruption tests, RSS bound | Released |
+| v0.2.2 | Phase 1 scale evidence: periodic restarts, snapshot/WAL byte bounds, benchmark doc | Released |
 | v0.3.0 | Phase 2 scheduler, worker identity, fencing | Planned |
 | v0.4.0 | Phase 3 connections, scale, benchmark harness | Planned |
 | v0.5.0 | Phase 4 TLS, per-worker credentials, fuzzing | Planned |
