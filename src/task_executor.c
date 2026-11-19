@@ -76,6 +76,20 @@ int start_task(struct Task *task)
         return 0;
     }
 
+    /*
+     * Test hook, same convention as IDR_TEST_CRASH_AT: force the
+     * start-failure path so the worker's failed-result reporting
+     * can be exercised end to end.
+     */
+    const char *fail = getenv("IDR_TEST_FAIL_START");
+
+    if (fail != NULL && fail[0] != '\0')
+    {
+        task->state = TASK_FAILED;
+        task->exit_status = -1;
+        return 0;
+    }
+
     if (task->argument_count < 0 ||
         task->argument_count > TASK_ARGUMENT_COUNT)
     {

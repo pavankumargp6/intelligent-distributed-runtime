@@ -23,6 +23,14 @@ if ss -ltn 2>/dev/null | grep -q ':5001 '; then
 fi
 
 export IDR_INSECURE=1
+
+# Poll once per second. With the default 0 s interval both workers
+# spin-request tasks, so the 10-task split is decided by a
+# millisecond race between two tight loops rather than by the
+# scheduler. A bounded interval gives each worker one request per
+# round, which is the behavior this test claims to measure.
+export IDR_AGENT_INTERVAL_SECONDS=1
+
 IDR_WAL_PATH="$WAL" ./build/runtime_server > "$COORD_LOG" 2>&1 &
 COORD_PID=$!
 
@@ -63,6 +71,6 @@ if [ "$W1_TASKS" -ge 4 ] && [ "$W2_TASKS" -ge 4 ]; then
     echo "===== scheduler fairness test: PASS ====="
     exit 0
 else
-    echo "FAIL: expected exactly 5 tasks each, got W1=$W1_TASKS W2=$W2_TASKS"
+    echo "FAIL: expected at least 4 tasks each, got W1=$W1_TASKS W2=$W2_TASKS"
     exit 1
 fi

@@ -24,7 +24,7 @@ semantics, scale, and evidence.
 | Dimension | Current (v0.2) | v1.0 target |
 |---|---|---|
 | Durability | WAL 2.0: framed segments, snapshots, bounded footprint; 1M lifetime tasks with 100 restarts, 42 MB peak RSS, 7 crash points, and corruption/missing-segment tests | Backup/restore and disk-full drills; chaos runs |
-| Semantics | Explicit policy: uncertain non-idempotent tasks become `TASK_UNKNOWN`; queued tasks still return `QUERY_UNKNOWN` | `QUERY_PENDING_QUEUED`; attempts exposed on the wire |
+| Semantics | Explicit policy: uncertain non-idempotent tasks become `TASK_UNKNOWN`; queued tasks return `QUERY_PENDING` (v0.3.0) | `QUERY_PENDING_QUEUED` with queue position; attempts exposed on the wire |
 | Scheduling | Static capacity fit; `available == total` | Live slots/load; reservations; fairness; backpressure |
 | Scale | Queue 512; in-flight/completed 64; 16-worker pool | Dynamic limits; 100+ workers; 1k+ concurrent; 10k+ queued |
 | Security | Shared role secrets; plaintext; experimental sandbox | Per-worker identity; TLS/mTLS; quotas; sandbox; fuzzed parsers |
@@ -155,12 +155,13 @@ What shipped:
   **42 MB** across the 100 in-process restarts (3.7 MB for a single
   restart). Raw data and host details are in `docs/BENCHMARK.md`.
 
-Deliberately deferred to later phases:
+Delivered in Phase 2 (v0.3.0 development):
 
-- `QUERY_PENDING_QUEUED` for queued tasks is Phase 2; v0.2 keeps
-  returning `QUERY_UNKNOWN`, pinned by tests and documented in
-  `docs/SEMANTICS.md`.
-- The accepted-but-start-failed stuck-in-flight defect is Phase 2.
+- queued tasks return `QUERY_PENDING`; v0.2 returned `QUERY_UNKNOWN`,
+  and both behaviors are pinned by tests and documented in
+  `docs/SEMANTICS.md`;
+- a worker that accepts a task but cannot start or wait for it reports
+  `TASK_FAILED` instead of exiting silently.
 
 Exit criteria: met. 1M lifetime tasks with a restart every 10,000
 tasks; bounded WAL (3 segments and 1.9 MB peak between snapshots after
@@ -171,7 +172,7 @@ execution of non-idempotent tasks (they become `TASK_UNKNOWN`).
 
 ## Phase 2 - Scheduler and worker lifecycle
 
-Status: planned.
+Status: in progress (v0.3.0 development).
 
 - [ ] Use worker slots as the primary admission control
 - [ ] Report running tasks, free slots, load, and epoch in heartbeats
@@ -180,6 +181,7 @@ Status: planned.
 - [ ] Make queue and in-flight limits configurable
 - [ ] Add fair-share and priority scheduling
 - [ ] Add queue high-water marks and explicit backpressure
+- [x] Report `TASK_FAILED` when a worker cannot start or wait for an accepted task
 - [ ] Add a worker-side child supervisor (`waitpid`, SIGCHLD, child cap)
 - [ ] Enforce per-task execution timeouts and process-group cleanup
 - [ ] Retry result reporting with backoff and duplicate suppression
@@ -187,7 +189,7 @@ Status: planned.
 - [ ] Add worker epochs/fencing tokens to assignments and results
 - [ ] Validate that `TASK_ACCEPT` and `TASK_RESULT` come from the assigned worker
 - [ ] Make the coordinator endpoint configurable for clients and workers
-- [ ] Make QUERY return `QUERY_PENDING` for queued tasks
+- [x] Make QUERY return `QUERY_PENDING` for queued tasks
 
 Exit criteria: 100 workers; 1k concurrent tasks; no worker exceeds its
 slot count; stale or duplicate results are rejected; queued tasks are

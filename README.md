@@ -140,7 +140,7 @@ fields are encoded as `<len>:<bytes>`, where `<len>` is the byte count.
 *   **Task assignment:** `TASK_ASSIGN|<task_id>|<len>:<cmd>|<argc>|<len>:<arg1>|...|<timeout_seconds>`
 *   **Task acceptance:** `TASK_ACCEPT|<task_id>`
 *   **Result:** `TASK_RESULT|<task_id>|<worker_id>|<exit_status>|<state>`
-*   **Query:** `QUERY|<task_id>`, answered with `QUERY_RESULT`, `QUERY_PENDING`, or `QUERY_UNKNOWN`
+*   **Query:** `QUERY|<task_id>`, answered with `QUERY_RESULT`, `QUERY_PENDING` (queued or in flight), `QUERY_EXPIRED`, or `QUERY_UNKNOWN`
 *   **State codes:** `0=CREATED, 1=RUNNING, 2=COMPLETED, 3=FAILED, 4=TIMED_OUT`
 
 `<len>` is the byte count of the field that follows, for example `4:echo`.
@@ -292,8 +292,8 @@ under sanitizers.
 *   **Bounded retention.** The in-memory index retains the last
     `IDR_RESULT_RETENTION` results (default 100,000) for at most
     `IDR_RESULT_RETENTION_SECONDS` (default 7 days). Aged-out ids return
-    `QUERY_EXPIRED`. Queued tasks still return `QUERY_UNKNOWN` in v0.2;
-    `QUERY_PENDING` for queued tasks is a Phase 2 item.
+    `QUERY_EXPIRED`. Queued tasks return `QUERY_PENDING` as of v0.3.0
+    (v0.2 returned `QUERY_UNKNOWN`).
 *   **Acknowledgement is not exactly-once.** `SUBMIT_ACK` means the
     `SUBMIT` record was fsynced and the task was queued. It does not
     mean the task will run exactly once. A client that loses the ACK
@@ -301,8 +301,7 @@ under sanitizers.
 
 Remaining durability work is in
 [`docs/ROADMAP.md`](docs/ROADMAP.md): result-report retry with backoff,
-the accepted-but-start-failed stuck-in-flight defect, and disk-full and
-backup/restore drills.
+worker epochs/fencing, and disk-full and backup/restore drills.
 
 ### Delivery semantics
 
@@ -366,9 +365,10 @@ than live load balancing.
     task's `timeout_seconds` stops it. A task with timeout `0` can run
     indefinitely.
 *   If the worker fails to start or wait for a task after sending
-    `TASK_ACCEPT`, the runner exits without reporting a result. The task
-    stays in flight for as long as the worker keeps heartbeating,
-    because the dispatch timeout no longer applies.
+    `TASK_ACCEPT`, v0.3.0 reports `TASK_FAILED` instead of exiting
+    silently. If that result report itself fails (for example, the
+    coordinator is unreachable), the task stays in flight until the
+    worker stops heartbeating or the coordinator restarts.
 
 ### Benchmark caveats
 
@@ -391,7 +391,7 @@ next. The phases and exit criteria are in
 |---|---|
 | 0 | Contract, architecture, threat model, release policy (done) |
 | 1 | WAL 2.0: snapshots, segments, checksums, recovery policy (done, v0.2.0) |
-| 2 | Live scheduling, worker lifecycle, per-worker identity and epochs |
+| 2 | Live scheduling, worker lifecycle, per-worker identity and epochs (in progress, v0.3.0) |
 | 3 | Persistent connections, scale, reproducible benchmarks |
 | 4 | TLS, quotas, sandbox, parser fuzzing |
 | 5 | Prometheus, config, CLI, packaging, runbooks |

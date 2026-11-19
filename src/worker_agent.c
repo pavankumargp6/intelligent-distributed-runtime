@@ -93,20 +93,37 @@ static void run_task_in_child(const struct Worker *worker,
     signal(SIGCHLD, SIG_DFL);
     struct Task task = *assigned;
 
-    if (!start_task(&task))
+    int finished = start_task(&task);
+
+    if (!finished)
     {
         log_error("task_start_failed",
                   "[task %d] start_task failed.",
                   task.id);
-        _exit(1);
     }
-
-    if (!wait_for_task(&task))
+    else if (!wait_for_task(&task))
     {
         log_error("task_wait_failed",
                   "[task %d] wait_for_task failed.",
                   task.id);
-        _exit(1);
+        finished = 0;
+    }
+
+    /*
+     * A task that could not be started or waited on is still a
+     * task the coordinator has marked in-flight. Report a failed
+     * result instead of exiting silently: otherwise the entry
+     * stays in flight as long as this worker heartbeats, and the
+     * client sees QUERY_PENDING forever. Both start_task() and
+     * wait_for_task() set state and exit_status on failure; the
+     * guards below only cover a partial update.
+     */
+    if (!finished && task.state != TASK_FAILED &&
+        task.state != TASK_TIMED_OUT &&
+        task.state != TASK_COMPLETED)
+    {
+        task.state = TASK_FAILED;
+        task.exit_status = -1;
     }
 
     log_info("task_finished",

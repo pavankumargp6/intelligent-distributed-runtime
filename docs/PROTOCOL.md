@@ -300,11 +300,12 @@ Looks up the current state of a task.
 Response: one of
 
 - `QUERY_RESULT|<id>|<worker>|<exit>|<state>` — task finished
-- `QUERY_PENDING|<id>` — task currently in the in-flight table
+- `QUERY_PENDING|<id>` — task is queued or in the in-flight table.
+  v0.2 returned `QUERY_UNKNOWN` for queued tasks; v0.3.0 returns
+  `QUERY_PENDING`.
 - `QUERY_EXPIRED|<id>` — id is below `next_task_id` but aged out of
   retention
-- `QUERY_UNKNOWN|<id>` — task never seen; in v0.2 a queued task also
-  returns this (Phase 2 target: `QUERY_PENDING`)
+- `QUERY_UNKNOWN|<id>` — task id was never allocated
 
 **`STATUS`**
 

@@ -296,15 +296,18 @@ v1.0 target:
 
 | Response | Condition |
 |---|---|
-| `QUERY_PENDING|<task_id>` | task is currently in flight |
+| `QUERY_PENDING|<task_id>` | task is queued or in flight |
 | `QUERY_RESULT|<id>|<worker>|<exit>|<state>` | terminal result is retained in memory |
 | `QUERY_EXPIRED|<task_id>` | id is below `next_task_id` but no longer queued, in flight, or retained |
-| `QUERY_UNKNOWN|<task_id>` | task is not in flight and not retained; a queued task also returns this in v0.2 |
+| `QUERY_UNKNOWN|<task_id>` | task id was never allocated |
 
-v0.2 gap: a task that is queued but not yet dispatched is not
-in-flight and is not in the retained history, so `QUERY` returns
-`QUERY_UNKNOWN`. This behavior is pinned by tests. Phase 2 target:
-queued tasks return `QUERY_PENDING`.
+v0.2 returned `QUERY_UNKNOWN` for a task that was queued but not yet
+dispatched: it was neither in flight nor in retained history. v0.3.0
+returns `QUERY_PENDING` for queued tasks and pins it with
+`tests/status_test.sh` and `tests/wal_meta_recovery_test.sh`.
+
+v1.0 target: a distinct queued reply that exposes queue position and
+attempt number, instead of the shared `QUERY_PENDING`.
 
 v0.2 retention: the retained history holds the last
 `IDR_RESULT_RETENTION` (default 100,000) terminal results within
@@ -404,8 +407,7 @@ WAL 2.0 implements the snapshot and segment recovery pipeline from
 ADR-002. Remaining refinements for v1.0:
 
 1. expose attempt numbers and `TASK_UNKNOWN` history on the wire;
-2. return `QUERY_PENDING` for queued tasks (Phase 2);
-3. add backup/restore and disk-full drills (Phase 5).
+2. add backup/restore and disk-full drills (Phase 5).
 
 Recovery time and RSS are measured in the lifetime test: about 1 ms
 and 42 MB peak RSS across 100 in-process restarts after 1,000,000
@@ -426,7 +428,8 @@ tasks on the reference host. See `docs/BENCHMARK.md` section 9.
 | Result after `TASK_RESULT_ACK` | durable terminal result |
 | Result without ACK | unknown; the worker does not retry (Phase 2) |
 | Result whose WAL append fails | no ACK; the task stays in flight and is reconciled after restart |
-| Query for queued task | `QUERY_UNKNOWN` (v0.2 behavior; `QUERY_PENDING` is Phase 2) |
+| Worker accepts but cannot start the task | worker reports `TASK_FAILED` (v0.3.0); the task does not stay in flight |
+| Query for queued task | `QUERY_PENDING` (v0.3.0; `QUERY_UNKNOWN` in v0.2) |
 | Query for aged-out terminal task | `QUERY_EXPIRED` |
 
 v0.2 therefore does **not** provide exactly-once execution for

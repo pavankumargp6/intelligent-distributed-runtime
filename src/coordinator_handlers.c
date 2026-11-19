@@ -1027,10 +1027,11 @@ int coordinator_handle_query(struct Runtime *runtime,
     }
 
     /*
-     * A task that is still waiting in the queue is not expired:
-     * it has been accepted and will be dispatched. This keeps the
-     * current v0.x reply (QUERY_UNKNOWN) for queued tasks; the
-     * dedicated QUERY_PENDING_QUEUED reply is a v1.0 item.
+     * A task that is still waiting in the queue has been accepted
+     * and will be dispatched, so it is pending rather than
+     * unknown. v0.3.0 returns the same QUERY_PENDING reply used
+     * for in-flight tasks; a separate QUERY_PENDING_QUEUED reply
+     * that exposes the queue position remains a v1.0 target.
      */
     if (runtime->task_manager != NULL &&
         task_queue_contains(&runtime->task_manager->queue,
@@ -1038,7 +1039,7 @@ int coordinator_handle_query(struct Runtime *runtime,
     {
         n = snprintf(response,
                      sizeof(response),
-                     "QUERY_UNKNOWN|%ld",
+                     "QUERY_PENDING|%ld",
                      task_id);
         if (n <= 0 || (size_t)n >= sizeof(response))
         {

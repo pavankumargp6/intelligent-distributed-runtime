@@ -78,18 +78,15 @@ case "$Q4" in
 esac
 
 # Tasks 1, 2, 3 are recovered but not yet dispatched (no worker in
-# this test), so they sit in the task queue. The current QUERY
-# protocol only replies QUERY_PENDING for in-flight tasks and
-# QUERY_UNKNOWN for anything not in-flight and not completed, so
-# queued-but-not-dispatched tasks fall into the UNKNOWN bucket.
-# That is a pre-existing limitation of the query protocol, not a
-# recovery bug; the assertion here pins the current behavior.
+# this test), so they sit in the task queue. Queued tasks are
+# pending: v0.3.0 returns QUERY_PENDING for them instead of
+# QUERY_UNKNOWN.
 for id in 1 2 3; do
     Q=$(./build/client_query "$id" 2>/dev/null | grep -o 'QUERY_.*' | head -1)
     echo "QUERY $id: $Q"
     case "$Q" in
-        QUERY_UNKNOWN\|*) ;;
-        *) fail "task $id should be QUERY_UNKNOWN (queued, not yet dispatched), got: $Q" ;;
+        QUERY_PENDING\|*) ;;
+        *) fail "task $id should be QUERY_PENDING (queued, not yet dispatched), got: $Q" ;;
     esac
 done
 echo
