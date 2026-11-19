@@ -253,3 +253,81 @@ bash tests/bench_runtime.sh --clients=4 --workers=8 --tasks=200 \
 
 Results append to `/tmp/idr_bench_results.csv` by default.
 Override with `--output=PATH`.
+
+## 9. WAL lifetime test (Phase 1 evidence)
+
+Sections 1-8 measure throughput and latency. This section records the
+separate durability-scale test added for Phase 1: 1,000,000 lifetime
+tasks with a coordinator restart every 10,000 tasks. It runs without
+sockets, so it measures snapshot, segment, retention, and recovery
+behavior rather than the network path.
+
+### 9.1 Method
+
+`tests/wal_lifetime_test.sh` writes 2,000,000 framed records
+(`SUBMIT` + `RESULT` per task), takes snapshots at the configured
+cadence, and closes/reopens the WAL every 10,000 tasks. Each restart
+must rebuild the queue, retained history, counters, `next_task_id`,
+and LSN state from the latest snapshot plus the segment tail. The test
+sets retention to 5,000 results and rotation to 64 KiB so truncation
+and rotation run many times.
+
+The binary is compiled with `IDR_TEST_WAL_NO_SYNC`: this measures
+capacity and recovery, not fsync durability. Fsync ordering and crash
+behavior are covered by `tests/crash_recovery_test.sh` and
+`tests/recovery_snapshot_test.c`.
+
+### 9.2 Raw result
+
+Command:
+
+```sh
+bash tests/wal_lifetime_test.sh
+```
+
+Output on the same host as section 2 (2026-11-19):
+
+```text
+20 passed, 0 failed (tasks=1000000 restarts=100 segments=3 snapshot_bytes=120140 peak_wal_bytes=1993415 final_wal_bytes=72 recovery_seconds=0.001)
+Max RSS: 42036 KiB (limit 262144 KiB)
+```
+
+### 9.3 Derived measurements
+
+| Metric | Value | Bound asserted by the test |
+|---|---|---|
+| Lifetime tasks | 1,000,000 | exact |
+| Records written | 2,000,000 | exact |
+| Restarts | 100 (every 10,000 tasks) plus one timed final restart | every 10,000 tasks |
+| Recovery wall time (final restart) | 0.001 s | < 5 s |
+| Peak process RSS | 42,036 KiB (~41 MiB) | < 256 MiB |
+| Latest snapshot size | 120,140 bytes (~117 KiB) | < 16 MiB |
+| Peak WAL bytes between snapshots | 1,993,415 bytes (~1.9 MiB) | < 64 MiB |
+| WAL bytes after final recovery | 72 bytes (three empty segment headers) | reported |
+| Segments after final recovery | 3 | > 0 and < 100 |
+| Retained results | 5,000 | configured capacity |
+| Task ID watermark after restart | `total + 1` | never decreases or repeats |
+
+The 41 MiB figure covers 100 recoveries in one process. Each recovery
+allocates and frees a task map and a snapshot buffer, and the C
+allocator retains some arenas, so peak RSS accumulates across
+in-process restarts. A production restart is a fresh process; the
+single-restart measurement in v0.2.1 was 3.7 MB after the same
+1,000,000 tasks. The test asserts the harsher in-process bound: if
+RSS grows with lifetime tasks rather than with the number of restarts,
+the snapshot or retention logic has regressed.
+
+### 9.4 Reproducing and tuning
+
+```sh
+# Full default run (CI uses this)
+bash tests/wal_lifetime_test.sh
+
+# Smaller smoke run
+IDR_LIFETIME_TASKS=100000 bash tests/wal_lifetime_test.sh
+```
+
+The test honors `IDR_LIFETIME_TASKS`, `IDR_SEGMENT_BYTES`,
+`IDR_RESULT_RETENTION`, and `IDR_RESULT_RETENTION_SECONDS`.
+`make test` runs the full lifetime test, so a regression below the
+thresholds fails CI.

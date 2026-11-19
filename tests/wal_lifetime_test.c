@@ -14,6 +14,9 @@
  *     capacity: the oldest results age out, the newest are
  *     queryable, and lookups cost the same after a million tasks
  *     as they did after one,
+ *   - the coordinator restarts every 10,000 tasks and reopens the
+ *     WAL from the latest snapshot plus the segment tail, so state
+ *     cannot accumulate silently across restarts,
  *   - task ids never repeat and counters never saturate.
  */
 
@@ -23,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -77,6 +81,73 @@ static int count_segments(const char *base)
     globfree(&matches);
 
     return count;
+}
+
+static uint64_t path_bytes(const char *path)
+{
+    struct stat info;
+
+    if (stat(path, &info) != 0 || info.st_size < 0)
+    {
+        return 0;
+    }
+
+    return (uint64_t)info.st_size;
+}
+
+static uint64_t segment_bytes(const char *base)
+{
+    char pattern[600];
+    snprintf(pattern, sizeof(pattern), "%s.seg.*", base);
+
+    glob_t matches;
+    memset(&matches, 0, sizeof(matches));
+
+    uint64_t total = 0;
+
+    if (glob(pattern, 0, NULL, &matches) == 0)
+    {
+        for (size_t i = 0; i < matches.gl_pathc; i++)
+        {
+            total += path_bytes(matches.gl_pathv[i]);
+        }
+    }
+
+    globfree(&matches);
+
+    return total;
+}
+
+static uint64_t newest_snapshot_bytes(const char *base)
+{
+    char pattern[600];
+    snprintf(pattern, sizeof(pattern), "%s.snap.*.dat", base);
+
+    glob_t matches;
+    memset(&matches, 0, sizeof(matches));
+
+    uint64_t bytes = 0;
+
+    if (glob(pattern, 0, NULL, &matches) == 0 &&
+        matches.gl_pathc > 0)
+    {
+        size_t best = 0;
+
+        for (size_t i = 1; i < matches.gl_pathc; i++)
+        {
+            if (strcmp(matches.gl_pathv[i],
+                       matches.gl_pathv[best]) > 0)
+            {
+                best = i;
+            }
+        }
+
+        bytes = path_bytes(matches.gl_pathv[best]);
+    }
+
+    globfree(&matches);
+
+    return bytes;
 }
 
 int main(void)
@@ -136,6 +207,10 @@ int main(void)
         snapshot_every = 1;
     }
 
+    uint64_t restart_every = 10000;
+    uint64_t lifetime_records = 0;
+    uint64_t max_wal_bytes = 0;
+
     char line[128];
 
     for (uint64_t i = 1; i <= total; i++)
@@ -186,6 +261,70 @@ int main(void)
                 return 1;
             }
         }
+
+        /*
+         * Restart periodically, as the acceptance criteria for the
+         * lifetime test require. Recovery must rebuild the queue,
+         * retained history, counters, and the id watermark from the
+         * snapshot plus the segment tail every time.
+         */
+        if (restart_every > 0 && i % restart_every == 0)
+        {
+            lifetime_records += runtime.wal.total_records;
+
+            uint64_t bytes = segment_bytes(g_base);
+
+            if (bytes > max_wal_bytes)
+            {
+                max_wal_bytes = bytes;
+            }
+
+            wal_close(&runtime.wal);
+            coordinator_tasks_destroy(&table);
+
+            memset(&runtime, 0, sizeof(runtime));
+            memset(&manager, 0, sizeof(manager));
+
+            initialize_task_manager(&manager);
+            initialize_runtime_stats(&runtime.stats);
+
+            runtime.task_manager = &manager;
+            runtime.wal.fd = -1;
+
+            coordinator_tasks_init(&table);
+
+            if (!recovery_start(&runtime, &table, g_base))
+            {
+                printf("FAIL: restart at task %llu failed\n",
+                       (unsigned long long)i);
+                return 1;
+            }
+
+            if (table.next_task_id != (int)i + 1)
+            {
+                printf("FAIL: restart at task %llu rewound "
+                       "next_task_id to %d\n",
+                       (unsigned long long)i,
+                       table.next_task_id);
+                return 1;
+            }
+
+            if (runtime.stats.tasks_completed != (int)i)
+            {
+                printf("FAIL: restart at task %llu lost the "
+                       "completed counter (%d)\n",
+                       (unsigned long long)i,
+                       runtime.stats.tasks_completed);
+                return 1;
+            }
+        }
+    }
+
+    uint64_t tail_bytes = segment_bytes(g_base);
+
+    if (tail_bytes > max_wal_bytes)
+    {
+        max_wal_bytes = tail_bytes;
     }
 
     if (!recovery_take_snapshot(&runtime, &table, &runtime.wal))
@@ -194,7 +333,9 @@ int main(void)
         return 1;
     }
 
-    CHECK(runtime.wal.total_records == total * 2,
+    lifetime_records += runtime.wal.total_records;
+
+    CHECK(lifetime_records == total * 2,
           "every SUBMIT and RESULT reached the log");
 
     CHECK(runtime.wal.next_lsn == total * 2 + 1,
@@ -277,12 +418,35 @@ int main(void)
     CHECK(recovery_seconds < 5.0,
           "recovery after 1M tasks stays under 5 seconds");
 
+    int final_segments = count_segments(g_base);
+    uint64_t snapshot_bytes = newest_snapshot_bytes(g_base);
+    uint64_t wal_bytes = segment_bytes(g_base);
+
+    CHECK(final_segments > 0,
+          "recovery leaves an active segment");
+    CHECK(final_segments < 100,
+          "recovery leaves a bounded segment count");
+    CHECK(snapshot_bytes > 0 && snapshot_bytes < 16 * 1024 * 1024,
+          "the latest snapshot stays bounded");
+    CHECK(max_wal_bytes < 64 * 1024 * 1024,
+          "the WAL stays bounded between snapshots");
+
+    uint64_t restarts = restart_every > 0
+                            ? total / restart_every
+                            : 0;
+
     printf("\n%d passed, %d failed "
-           "(tasks=%llu segments=%d recovery_seconds=%.3f)\n",
+           "(tasks=%llu restarts=%llu segments=%d "
+           "snapshot_bytes=%llu peak_wal_bytes=%llu "
+           "final_wal_bytes=%llu recovery_seconds=%.3f)\n",
            passed,
            failed,
            (unsigned long long)total,
-           segments,
+           (unsigned long long)restarts,
+           final_segments,
+           (unsigned long long)snapshot_bytes,
+           (unsigned long long)max_wal_bytes,
+           (unsigned long long)wal_bytes,
            recovery_seconds);
 
     wal_close(&runtime.wal);
