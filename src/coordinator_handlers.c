@@ -444,6 +444,13 @@ static int reconcile_abandoned_task(struct Runtime *runtime,
         return 0;
     }
 
+    /*
+     * Release the worker's slot. The task was dispatched to this
+     * worker, so the reservation must be returned even when the
+     * worker is gone or the task is abandoned.
+     */
+    worker_release_slot(&runtime->registry, worker_id);
+
     coordinator_record_completed(table,
                                  task_id,
                                  worker_id,
@@ -902,6 +909,13 @@ int coordinator_handle_task_result(struct Runtime *runtime,
 
     task.exit_status = exit_status;
     task.state = (enum TaskState)state;
+
+    /*
+     * Release the worker's task slot now that the task is
+     * terminal. The slot was reserved at dispatch time, so
+     * every result path must release it exactly once.
+     */
+    worker_release_slot(&runtime->registry, worker_id);
 
     record_task_completion(&task.metrics);
 

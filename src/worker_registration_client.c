@@ -239,3 +239,151 @@ int send_worker_heartbeat(
 
     return 0;
 }
+
+int register_worker_with_runtime_with_load(
+    struct Worker *worker,
+    const char *runtime_address,
+    int running_tasks,
+    int max_running_tasks)
+{
+    if (worker == NULL || runtime_address == NULL)
+    {
+        return 0;
+    }
+
+    int fd = connect_to_runtime(runtime_address);
+
+    if (fd < 0)
+    {
+        return 0;
+    }
+
+    char plain[WORKER_REGISTRATION_MESSAGE_SIZE];
+
+    if (!build_worker_registration_with_load(worker,
+                                             running_tasks,
+                                             max_running_tasks,
+                                             plain,
+                                             sizeof(plain)))
+    {
+        close(fd);
+        return 0;
+    }
+
+    char signed_buf[AUTH_MAX_SIGNED_SIZE];
+    const char *to_send = NULL;
+
+    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
+    {
+        close(fd);
+        return 0;
+    }
+
+    if (!send_message(fd, to_send))
+    {
+        close(fd);
+        return 0;
+    }
+
+    char response[AUTH_MAX_SIGNED_SIZE];
+
+    if (!receive_message(fd, response, sizeof(response)))
+    {
+        close(fd);
+        return 0;
+    }
+
+    close(fd);
+
+    char plain_response[AUTH_MAX_SIGNED_SIZE];
+    const char *verified = NULL;
+
+    if (!verify_if_secure(response,
+                          plain_response,
+                          sizeof(plain_response),
+                          &verified))
+    {
+        return 0;
+    }
+
+    if (strcmp(verified, "REGISTER_ACK") == 0)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+int send_worker_heartbeat_with_load(
+    const struct Worker *worker,
+    const char *runtime_address,
+    int running_tasks,
+    int max_running_tasks)
+{
+    if (worker == NULL || runtime_address == NULL)
+    {
+        return 0;
+    }
+
+    int fd = connect_to_runtime(runtime_address);
+
+    if (fd < 0)
+    {
+        return 0;
+    }
+
+    char plain[128];
+
+    if (!build_worker_heartbeat_with_load(worker,
+                                          running_tasks,
+                                          max_running_tasks,
+                                          plain,
+                                          sizeof(plain)))
+    {
+        close(fd);
+        return 0;
+    }
+
+    char signed_buf[AUTH_MAX_SIGNED_SIZE];
+    const char *to_send = NULL;
+
+    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
+    {
+        close(fd);
+        return 0;
+    }
+
+    if (!send_message(fd, to_send))
+    {
+        close(fd);
+        return 0;
+    }
+
+    char response[AUTH_MAX_SIGNED_SIZE];
+
+    if (!receive_message(fd, response, sizeof(response)))
+    {
+        close(fd);
+        return 0;
+    }
+
+    close(fd);
+
+    char plain_response[AUTH_MAX_SIGNED_SIZE];
+    const char *verified = NULL;
+
+    if (!verify_if_secure(response,
+                          plain_response,
+                          sizeof(plain_response),
+                          &verified))
+    {
+        return 0;
+    }
+
+    if (strcmp(verified, "HEARTBEAT_ACK") == 0)
+    {
+        return 1;
+    }
+
+    return 0;
+}

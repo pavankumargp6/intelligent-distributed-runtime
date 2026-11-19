@@ -31,7 +31,11 @@ int register_worker(
             registry->workers[i].worker = *worker;
             registry->workers[i].last_seen = time(NULL);
             registry->workers[i].status = WORKER_ACTIVE;
-
+            /*
+             * Preserve running_tasks and max_running_tasks
+             * from any prior heartbeat unless the worker
+             * explicitly reports them later.
+             */
             return 1;
         }
     }
@@ -51,6 +55,8 @@ int register_worker(
     registry->workers[index].worker = *worker;
     registry->workers[index].last_seen = time(NULL);
     registry->workers[index].status = WORKER_ACTIVE;
+    registry->workers[index].running_tasks = 0;
+    registry->workers[index].max_running_tasks = DEFAULT_WORKER_MAX_TASKS;
 
     registry->count++;
 
@@ -143,6 +149,116 @@ int is_worker_live(
     for (int i = 0; i < registry->count; i++) {
         if (registry->workers[i].worker.id == worker_id) {
             return registry->workers[i].status == WORKER_ACTIVE ? 1 : 0;
+        }
+    }
+
+    return 0;
+}
+
+int worker_running_tasks(
+    struct WorkerRegistry *registry,
+    int worker_id)
+{
+    if (registry == NULL || worker_id <= 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < registry->count; i++) {
+        if (registry->workers[i].worker.id == worker_id) {
+            return registry->workers[i].running_tasks;
+        }
+    }
+
+    return 0;
+}
+
+int worker_max_running_tasks(
+    struct WorkerRegistry *registry,
+    int worker_id)
+{
+    if (registry == NULL || worker_id <= 0) {
+        return DEFAULT_WORKER_MAX_TASKS;
+    }
+
+    for (int i = 0; i < registry->count; i++) {
+        if (registry->workers[i].worker.id == worker_id) {
+            int cap = registry->workers[i].max_running_tasks;
+            return cap > 0 ? cap : DEFAULT_WORKER_MAX_TASKS;
+        }
+    }
+
+    return DEFAULT_WORKER_MAX_TASKS;
+}
+
+int worker_reserve_slot(
+    struct WorkerRegistry *registry,
+    int worker_id)
+{
+    if (registry == NULL || worker_id <= 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < registry->count; i++) {
+        if (registry->workers[i].worker.id == worker_id) {
+            if (registry->workers[i].status != WORKER_ACTIVE) {
+                return 0;
+            }
+
+            int cap = registry->workers[i].max_running_tasks;
+            if (cap <= 0) {
+                cap = DEFAULT_WORKER_MAX_TASKS;
+            }
+
+            if (registry->workers[i].running_tasks >= cap) {
+                return 0;
+            }
+
+            registry->workers[i].running_tasks++;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int worker_release_slot(
+    struct WorkerRegistry *registry,
+    int worker_id)
+{
+    if (registry == NULL || worker_id <= 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < registry->count; i++) {
+        if (registry->workers[i].worker.id == worker_id) {
+            if (registry->workers[i].running_tasks > 0) {
+                registry->workers[i].running_tasks--;
+            }
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int worker_update_load(
+    struct WorkerRegistry *registry,
+    int worker_id,
+    int running_tasks,
+    int max_running_tasks)
+{
+    if (registry == NULL || worker_id <= 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < registry->count; i++) {
+        if (registry->workers[i].worker.id == worker_id) {
+            registry->workers[i].running_tasks =
+                running_tasks >= 0 ? running_tasks : 0;
+            registry->workers[i].max_running_tasks =
+                max_running_tasks > 0 ? max_running_tasks : DEFAULT_WORKER_MAX_TASKS;
+            registry->workers[i].last_seen = time(NULL);
+            return 1;
         }
     }
 

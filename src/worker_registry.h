@@ -8,6 +8,14 @@
 #define WORKER_REGISTRY_CAPACITY 32
 
 /*
+ * Default per-worker task cap. A worker that does not report a
+ * capacity in its registration or heartbeat is treated as able to
+ * run this many tasks at once. It is a floor, not a promise:
+ * the coordinator still applies CPU and memory fit on top of it.
+ */
+#define DEFAULT_WORKER_MAX_TASKS 4
+
+/*
  * A worker is considered unavailable if
  * the runtime has not heard from it for
  * this many seconds.
@@ -25,7 +33,16 @@ enum WorkerStatus
 
 /*
  * Stores a worker together with
- * liveness information.
+ * liveness information and its current
+ * running-task count.
+ *
+ * The running count is the admission-control
+ * state: the coordinator reserves a slot when
+ * it dispatches a task and releases it when
+ * the task completes, is reaped, or the
+ * worker disappears. Dispatch never sends a
+ * task to a worker that is already at its
+ * cap.
  */
 struct WorkerRegistryEntry
 {
@@ -41,6 +58,20 @@ struct WorkerRegistryEntry
      * Current availability state.
      */
     enum WorkerStatus status;
+
+    /*
+     * Tasks this worker is currently executing,
+     * as last reported by the worker.
+     */
+    int running_tasks;
+
+    /*
+     * Maximum number of tasks this worker may
+     * run at once. Defaults to
+     * DEFAULT_WORKER_MAX_TASKS and is set from
+     * the worker's registration or heartbeat.
+     */
+    int max_running_tasks;
 };
 
 struct WorkerRegistry
@@ -114,5 +145,63 @@ int get_registered_worker_count(
 int is_worker_live(
     struct WorkerRegistry *registry,
     int worker_id
+);
+
+/*
+ * Number of tasks the coordinator currently believes the
+ * worker is running.
+ */
+int worker_running_tasks(
+    struct WorkerRegistry *registry,
+    int worker_id
+);
+
+/*
+ * Maximum number of tasks the worker may run at once.
+ *
+ * Returns the configured cap, or DEFAULT_WORKER_MAX_TASKS
+ * when the worker has not reported one.
+ */
+int worker_max_running_tasks(
+    struct WorkerRegistry *registry,
+    int worker_id
+);
+
+/*
+ * Reserve one task slot on a worker.
+ *
+ * Returns 1 and increments the running count when the worker
+ * is live and below its cap. Returns 0 when the worker is
+ * unknown, unavailable, or at capacity.
+ */
+int worker_reserve_slot(
+    struct WorkerRegistry *registry,
+    int worker_id
+);
+
+/*
+ * Release a task slot on a worker.
+ *
+ * Returns 1 if the worker existed and a slot was released,
+ * 0 otherwise. Decrements the running count without going
+ * below zero.
+ */
+int worker_release_slot(
+    struct WorkerRegistry *registry,
+    int worker_id
+);
+
+/*
+ * Set the worker's reported running count and capacity.
+ *
+ * Used by the heartbeat handler so the coordinator's view of
+ * the worker's load tracks the worker's own view. Returns 1
+ * if the worker existed, 0 otherwise.
+ */
+int worker_update_load(
+    struct WorkerRegistry *registry,
+    int worker_id,
+    int running_tasks,
+    int max_running_tasks
 );
 #endif

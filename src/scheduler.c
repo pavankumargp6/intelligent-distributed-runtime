@@ -63,6 +63,22 @@ int schedule_next_task(struct Scheduler *scheduler,
     }
 
     /*
+     * Reserve a task slot on the selected worker before assigning.
+     * The slot is released when the task completes, is reaped, or
+     * the worker disappears, so a worker can never be handed more
+     * tasks than its capacity.
+     */
+    if (!worker_reserve_slot(scheduler->registry,
+                            (*selected_worker)->id))
+    {
+        submit_task(scheduler->manager, task);
+
+        *selected_worker = NULL;
+
+        return 0;
+    }
+
+    /*
      * Record the selected worker directly
      * in the task.
      */
@@ -120,7 +136,8 @@ int schedule_next_task_for_worker(struct Scheduler *scheduler,
         int actual_index = (queue->front + i) % TASK_QUEUE_CAPACITY;
         struct Task *candidate = &queue->tasks[actual_index];
 
-        if (task_fits_worker(candidate, &asking->resources))
+        if (task_fits_worker(candidate, &asking->resources) &&
+            worker_reserve_slot(scheduler->registry, asking->id))
         {
             /*
              * O(1) trick: Swap the fitting task with the front of the queue,
