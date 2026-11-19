@@ -548,6 +548,60 @@ static void test_missing_and_bad_header(void)
     }
 }
 
+static void test_unknown_version(void)
+{
+    remove_wal_files(g_base);
+
+    struct Wal wal = { .fd = -1 };
+
+    if (!wal_open_for_append(&wal, g_base))
+    {
+        CHECK(0, "version: open");
+        return;
+    }
+
+    wal_close(&wal);
+
+    char path[600];
+
+    if (!wal_segment_path(g_base, 1, path, sizeof(path)))
+    {
+        CHECK(0, "version: path");
+        return;
+    }
+
+    int fd = open(path, O_RDWR);
+
+    if (fd < 0)
+    {
+        CHECK(0, "version: open segment");
+        return;
+    }
+
+    unsigned char unknown_version[2] = { 0xe7, 0x03 }; /* 999 */
+
+    if (pwrite(fd, unknown_version, sizeof(unknown_version), 4) !=
+        (ssize_t)sizeof(unknown_version))
+    {
+        CHECK(0, "version: write unknown version");
+    }
+
+    close(fd);
+
+    wal.fd = -1;
+
+    CHECK(wal_open_for_append(&wal, g_base) == 0,
+          "unknown segment format version is rejected");
+
+    if (wal.fd >= 0)
+    {
+        wal_close(&wal);
+    }
+
+    CHECK(wal_foreach_record(g_base, 0, collect_cb, NULL) == -1,
+          "unknown segment format version fails replay");
+}
+
 int main(void)
 {
     snprintf(g_base,
@@ -564,6 +618,7 @@ int main(void)
     test_rejections();
     test_stop_early();
     test_missing_and_bad_header();
+    test_unknown_version();
 
     remove_wal_files(g_base);
 

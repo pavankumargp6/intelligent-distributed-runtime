@@ -9,6 +9,8 @@ set -u
 cd "$(dirname "$0")/.."
 
 BIN=/tmp/idr_wal_lifetime_test
+TIME_LOG=$(mktemp)
+trap 'rm -f "$TIME_LOG"' EXIT
 
 echo "===== Building wal_lifetime_test ====="
 gcc -Wall -Wextra -DIDR_TEST_WAL_NO_SYNC -Isrc \
@@ -24,4 +26,19 @@ gcc -Wall -Wextra -DIDR_TEST_WAL_NO_SYNC -Isrc \
     src/wire_fields.c \
     -o "$BIN" || exit 1
 
-"$BIN"
+if command -v /usr/bin/time >/dev/null 2>&1; then
+    /usr/bin/time -v -o "$TIME_LOG" "$BIN" || exit 1
+
+    MAX_RSS_KB=$(awk '/Maximum resident set size/ { print $NF }' "$TIME_LOG")
+
+    if [ -n "$MAX_RSS_KB" ]; then
+        echo "Max RSS: ${MAX_RSS_KB} KiB (limit 262144 KiB)"
+
+        if [ "$MAX_RSS_KB" -gt 262144 ]; then
+            echo "FAIL: max RSS exceeds the 256 MiB bound" >&2
+            exit 1
+        fi
+    fi
+else
+    "$BIN" || exit 1
+fi

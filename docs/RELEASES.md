@@ -57,9 +57,10 @@ a breaking change regardless of the version number chosen.
 
 As of this document (2026-11-18):
 
-- `v0.2.0` is the first tagged release and marks Phase 1 (WAL 2.0)
-  complete. The `0.x` compatibility rules in section 3 apply from this
-  tag; the `1.x` promises start at `v1.0.0`;
+- `v0.2.1` is the current release. `v0.2.0` was the first tag and
+  marked Phase 1 (WAL 2.0) complete; `v0.2.1` hardens recovery. The
+  `0.x` compatibility rules in section 3 apply from `v0.2.0`; the
+  `1.x` promises start at `v1.0.0`;
 - the coordinator, worker, and clients are built from source with `make`;
 - there is no version string compiled into the binaries and no
   `--version` flag yet (Phase 5);
@@ -68,7 +69,7 @@ As of this document (2026-11-18):
   text WAL is imported once and renamed `<base>.legacy`;
 - CI builds and runs the test suite on `ubuntu-latest` only.
 
-Commits after `v0.2.0` on `main` are unreleased development builds until
+Commits after `v0.2.1` on `main` are unreleased development builds until
 the next tag.
 
 `v0.2.0` supersedes the untagged v0.1 state. The version is `0.2.0`
@@ -95,6 +96,29 @@ Operator action: none required for a clean start. A v0.1 text WAL is
 imported automatically on first start and archived as `<base>.legacy`.
 Upgrade the coordinator before the workers; the wire protocol is
 unchanged in this release.
+
+### 2.2 v0.2.1 release notes (recovery hardening)
+
+Highlights:
+
+- recovery now validates the segment chain before loading a snapshot.
+  A contiguous chain is required, and the segment created by the
+  snapshot rotation (`boundary_seq + 1`) must still exist. A missing
+  required segment fails closed with `wal_segment_gap` instead of
+  recovering incomplete state;
+- segments at or below the snapshot boundary may be absent, because the
+  snapshot covers them; a test deletes one and asserts recovery still
+  succeeds;
+- a corrupt manifest now falls back to the newest orphaned snapshot and
+  replays the remaining segments, covered by a test;
+- the lifetime test asserts peak RSS below 256 MiB and reports the
+  measured value (3.7 MB after 1,000,000 tasks).
+- new tests: unknown segment format version, corrupt manifest, missing
+  covered segment, missing uncovered segment. The recovery snapshot
+  suite is 49 checks; the WAL suite is 47.
+
+Operator action: none. On-disk formats and the wire protocol are
+unchanged from v0.2.0.
 
 ## 3. Compatibility promises
 
@@ -244,6 +268,7 @@ git push origin v0.2.0
 |---|---|---|
 | untagged v0.1 | Pre-Phase 0 / v0.1 WAL | Historical baseline, no tag |
 | v0.2.0 | Phase 0 docs, Phase 1 WAL 2.0, delivery semantics | Released |
+| v0.2.1 | Recovery hardening: segment-chain validation, corruption tests, RSS bound | Released |
 | v0.3.0 | Phase 2 scheduler, worker identity, fencing | Planned |
 | v0.4.0 | Phase 3 connections, scale, benchmark harness | Planned |
 | v0.5.0 | Phase 4 TLS, per-worker credentials, fuzzing | Planned |

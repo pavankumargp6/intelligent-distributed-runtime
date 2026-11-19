@@ -169,6 +169,18 @@ int wal_find_active_segment(const char *base_path,
                             uint64_t *sequence);
 
 /*
+ * Verify that the existing segment sequence is contiguous and
+ * still includes boundary_seq + 1, the segment created by the
+ * rotation that follows a snapshot. Segments at or below
+ * boundary_seq are fully covered and may be absent.
+ *
+ * Returns 1 when the chain is complete, 0 when a required
+ * segment is missing or a sequence gap exists.
+ */
+int wal_validate_segment_chain(const char *base_path,
+                               uint64_t boundary_seq);
+
+/*
  * Delete segment files with sequence < keep_from.
  * Returns the number removed, or -1 on error.
  */

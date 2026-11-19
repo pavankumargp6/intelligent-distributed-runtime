@@ -253,10 +253,19 @@ and renamed `<base>.legacy`.
 ### 7.2 Snapshots and truncation
 
 A snapshot is taken every 10,000 records or 300 seconds, and once after
-startup recovery. Once the manifest points at a snapshot, segments
-fully covered by it are removed. The result is a bounded footprint:
-after 1,000,000 lifetime tasks (2M records) with 64 KiB test segments,
-the WAL holds 3 segments.
+startup recovery. The snapshot records the last segment it covers
+(`boundary_seq`), then the WAL rotates to `boundary_seq + 1`. Once the
+manifest points at a snapshot, segments at or below `boundary_seq` may
+be removed. The result is a bounded footprint: after 1,000,000 lifetime
+tasks (2M records) with 64 KiB test segments, the WAL holds 3 segments.
+
+Removal never touches the segment after the boundary, because records
+appended after the snapshot live there. Recovery validates this: the
+segment sequence must be contiguous and must still include
+`boundary_seq + 1`. If a required segment is missing, startup fails
+with `wal_segment_gap` rather than recovering incomplete state. Segments
+at or below the boundary may be absent because the snapshot covers
+them.
 
 The v0.1 text WAL had no magic, version, or checksum, kept every record
 forever, and refused to start after 4,096 lifetime tasks. That design
@@ -268,17 +277,20 @@ is retired; ADR-001 records the replacement.
 
 1. reads the manifest;
 2. loads the newest valid snapshot, falling back to the previous one if
-   it is corrupt;
-3. replays segments with records after the snapshot LSN;
-4. applies the delivery policy from `docs/SEMANTICS.md`: duplicate
+   it is corrupt, or to the newest orphaned snapshot if the manifest is
+   unreadable;
+3. verifies that the segment chain is contiguous and still contains
+   `boundary_seq + 1`;
+4. replays segments with records after the snapshot LSN;
+5. applies the delivery policy from `docs/SEMANTICS.md`: duplicate
    results are ignored, uncertain non-idempotent tasks become
    `TASK_UNKNOWN`, idempotent tasks are requeued within the attempt
    bound;
-5. restores counters and `next_task_id`, then writes a fresh snapshot.
+6. restores counters and `next_task_id`, then writes a fresh snapshot.
 
 Recovery time is bounded by the snapshot cadence rather than lifetime
-task count: `tests/wal_lifetime_test.c` measures 2 ms after 1,000,000
-tasks on the reference WSL2 host.
+task count: `tests/wal_lifetime_test.c` measures 2 ms and 3.7 MB peak
+RSS after 1,000,000 tasks on the reference WSL2 host.
 
 ## 8. Authentication and authorization
 
@@ -355,7 +367,7 @@ is not safe for arbitrary hostile code.
 | Task child hangs with heartbeat alive | Only task timeout stops it | Same, plus optional coordinator deadline |
 | Coordinator crashes | Snapshot load plus idempotency-aware segment replay | Same, plus attempt history on the wire |
 | WAL append fails | Coordinator refuses ACK | Same, plus readiness signal and alert |
-| WAL grows with lifetime tasks | Bounded: snapshots plus segment truncation | Same, plus published recovery/RSS metrics |
+| WAL grows with lifetime tasks | Bounded: snapshots plus segment truncation; 2 ms recovery and 3.7 MB RSS after 1M tasks | Same, plus alerting on unexpected growth |
 | Metrics client stalls | Event loop blocks in `recv()` | Non-blocking metrics state machine |
 | Disk full | Append fails, ACK is refused; readiness check warns below `IDR_MIN_FREE_BYTES` | Same, plus health/readiness endpoint and runbook |
 

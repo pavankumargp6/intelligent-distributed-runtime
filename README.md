@@ -3,12 +3,13 @@
 [![CI](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pavankumargp6/intelligent-distributed-runtime/actions/workflows/ci.yml)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/pavankumargp6/badge.svg)](https://hub.xerj.org/contributors/pavankumargp6)
 
-> **Project status: v0.2.0 (pre-1.0).**
+> **Project status: v0.2.1 (pre-1.0).**
 >
 > This code is a working systems demonstration of durable task
 > submission, process-level execution, scheduling, and crash recovery.
 > WAL 2.0 makes durability bounded and crash-tested (1,000,000 lifetime
-> tasks, 2 ms restart), and uncertain non-idempotent outcomes return
+> tasks, 2 ms restart, 3.7 MB peak RSS), and uncertain non-idempotent
+> outcomes return
 > `TASK_UNKNOWN` instead of being silently retried. It is **not**
 > production-ready: capacities are still demo-scale, transport is
 > plaintext, and there is a single coordinator. See
@@ -52,9 +53,11 @@ graph TD
 
 *   **Bounded, crash-tested durability:** WAL 2.0 uses framed,
     CRC-protected segments, atomic snapshots, and a manifest. Recovery
-    replays the snapshot plus the segment tail in 2 ms after 1,000,000
-    lifetime tasks, and seven injected crash points are covered by
-    tests. See [Durability](#durability).
+    replays the snapshot plus the segment tail in 2 ms with 3.7 MB peak
+    RSS after 1,000,000 lifetime tasks. Seven injected crash points,
+    torn tails, mid-file corruption, corrupt manifests, unknown format
+    versions, and missing segments are covered by tests. See
+    [Durability](#durability).
 *   **Authenticated networking:** TCP sockets with HMAC-SHA256
     authentication, role-specific secrets, timestamp checks, and replay
     protection. Messages are authenticated but not encrypted.
@@ -270,7 +273,13 @@ under sanitizers.
     atomic snapshots and removes segments fully covered by the latest
     snapshot. The log is bounded by the snapshot cadence and retention,
     not by lifetime task count. The 1M-task lifetime test leaves 3
-    segments and restarts in 2 ms.
+    segments and restarts in 2 ms with 3.7 MB peak RSS.
+*   **Missing segments fail closed.** Recovery checks that the segment
+    sequence is contiguous and that the segment created by the snapshot
+    rotation still exists. A required segment that is missing refuses
+    startup instead of silently recovering incomplete state. A corrupt
+    manifest falls back to the newest orphaned snapshot and replays the
+    remaining segments.
 *   **Explicit uncertainty.** A non-idempotent task whose outcome cannot
     be proven after a crash or worker loss returns `TASK_UNKNOWN`
     (state 5). It is never reported as `FAILED` and never silently
@@ -369,8 +378,9 @@ multiple measured runs, and percentile reporting. See
 
 ## Roadmap
 
-Phases 0 and 1 are complete; v0.2.0 ships WAL 2.0. Phase 2 is next. The
-phases and exit criteria are in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Phases 0 and 1 are complete; v0.2.0 shipped WAL 2.0 and v0.2.1 hardened
+recovery. Phase 2 is next. The phases and exit criteria are in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 | Phase | Focus |
 |---|---|

@@ -1107,6 +1107,118 @@ static int segment_header_ok(int fd,
     return validate_segment_header(fd, expected_sequence, file_size);
 }
 
+int wal_validate_segment_chain(const char *base_path,
+                               uint64_t boundary_seq)
+{
+    if (base_path == NULL)
+    {
+        return 0;
+    }
+
+    char pattern[WAL_PATH_MAX];
+
+    int n = snprintf(pattern, sizeof(pattern), "%s.seg.*", base_path);
+
+    if (n <= 0 || (size_t)n >= sizeof(pattern))
+    {
+        return 0;
+    }
+
+    glob_t matches;
+    memset(&matches, 0, sizeof(matches));
+
+    int rc = glob(pattern, 0, NULL, &matches);
+
+    if (rc == GLOB_NOMATCH)
+    {
+        globfree(&matches);
+
+        log_error("wal_segment_missing",
+                  "Snapshot covers through segment %llu but no segments "
+                  "exist for %s",
+                  (unsigned long long)boundary_seq,
+                  base_path);
+        return 0;
+    }
+
+    if (rc != 0)
+    {
+        globfree(&matches);
+        return 0;
+    }
+
+    uint64_t previous = 0;
+    uint64_t first = 0;
+    uint64_t last = 0;
+    int have_segment = 0;
+
+    for (size_t i = 0; i < matches.gl_pathc; i++)
+    {
+        uint64_t sequence = 0;
+
+        if (!parse_segment_sequence(matches.gl_pathv[i], &sequence))
+        {
+            continue;
+        }
+
+        if (!have_segment)
+        {
+            first = sequence;
+        }
+        else if (sequence != previous + 1)
+        {
+            log_error("wal_segment_gap",
+                      "Missing WAL segment between sequence %llu and "
+                      "%llu for %s; refusing to recover incomplete state",
+                      (unsigned long long)previous,
+                      (unsigned long long)sequence,
+                      base_path);
+            globfree(&matches);
+            return 0;
+        }
+
+        previous = sequence;
+        last = sequence;
+        have_segment = 1;
+    }
+
+    globfree(&matches);
+
+    if (!have_segment)
+    {
+        log_error("wal_segment_missing",
+                  "Snapshot covers through segment %llu but none could "
+                  "be parsed for %s",
+                  (unsigned long long)boundary_seq,
+                  base_path);
+        return 0;
+    }
+
+    /*
+     * boundary_seq is the last segment fully covered by the
+     * snapshot; the rotation that follows it creates
+     * boundary_seq + 1. Segments below that floor may be deleted
+     * safely, but the floor itself must still be present: without
+     * it, records appended after the snapshot could be missing.
+     */
+    uint64_t required = boundary_seq + 1;
+
+    if (first > required || last < required)
+    {
+        log_error("wal_segment_gap",
+                  "Snapshot covers through segment %llu, but the "
+                  "available segment range is %llu-%llu for %s; "
+                  "refusing to recover incomplete state",
+                  (unsigned long long)boundary_seq,
+                  (unsigned long long)first,
+                  (unsigned long long)last,
+                  base_path);
+        return 0;
+    }
+
+    return 1;
+}
+
 int wal_foreach_record(const char *base_path,
                        uint64_t after_lsn,
                        wal_record_cb cb,
