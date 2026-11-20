@@ -57,6 +57,7 @@ int register_worker(
     registry->workers[index].status = WORKER_ACTIVE;
     registry->workers[index].running_tasks = 0;
     registry->workers[index].max_running_tasks = DEFAULT_WORKER_MAX_TASKS;
+    registry->workers[index].epoch = 0;
 
     registry->count++;
 
@@ -263,4 +264,39 @@ int worker_update_load(
     }
 
     return 0;
+}
+
+int worker_get_epoch(
+    struct WorkerRegistry *registry,
+    int worker_id)
+{
+    if (registry == NULL || worker_id <= 0) {
+        return -1;
+    }
+
+    for (int i = 0; i < registry->count; i++) {
+        if (registry->workers[i].worker.id == worker_id) {
+            return registry->workers[i].epoch;
+        }
+    }
+
+    return -1;
+}
+
+int worker_increment_epoch(
+    struct WorkerRegistry *registry,
+    int worker_id)
+{
+    if (registry == NULL || worker_id <= 0) {
+        return -1;
+    }
+
+    for (int i = 0; i < registry->count; i++) {
+        if (registry->workers[i].worker.id == worker_id) {
+            registry->workers[i].epoch++;
+            return registry->workers[i].epoch;
+        }
+    }
+
+    return -1;
 }

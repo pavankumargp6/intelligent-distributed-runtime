@@ -293,14 +293,16 @@ int main(int argc, char *argv[])
         }
 
         log_info("task_received",
-                 "Task received: id=%d command=%s argc=%d",
+                 "Task received: id=%d command=%s argc=%d epoch=%d",
                  task.id,
                  task.command,
-                 task.argument_count);
+                 task.argument_count,
+                 task.epoch);
 
         if (!send_task_accept_to_runtime(&worker,
                                          RUNTIME_ADDRESS,
-                                         task.id))
+                                         task.id,
+                                         task.epoch))
         {
             log_warn("task_accept_failed",
                      "Could not accept task %d; discarding.",

@@ -198,6 +198,22 @@ static int parse_task_assign(const char *message,
     }
 
     task->timeout_seconds = (timeout > 0) ? (int)timeout : 0;
+
+    /*
+     * Epoch is optional for backward compatibility.
+     * If not present, default to 0.
+     */
+    long epoch = 0;
+    if (wire_read_delimiter(&cursor) &&
+        wire_read_int(&cursor, &epoch))
+    {
+        task->epoch = (int)epoch;
+    }
+    else
+    {
+        task->epoch = 0;
+    }
+
     return 1;
 }
 
@@ -286,7 +302,8 @@ int request_task_from_runtime(
 int send_task_accept_to_runtime(
     const struct Worker *worker,
     const char *runtime_address,
-    int task_id)
+    int task_id,
+    int epoch)
 {
     if (worker == NULL || runtime_address == NULL || task_id <= 0)
     {
@@ -302,7 +319,7 @@ int send_task_accept_to_runtime(
 
     char plain[64];
     int n = snprintf(plain, sizeof(plain),
-                     "TASK_ACCEPT|%d", task_id);
+                     "TASK_ACCEPT|%d|%d", task_id, epoch);
 
     if (n <= 0 || (size_t)n >= sizeof(plain))
     {
@@ -377,11 +394,12 @@ int send_task_result_to_runtime(
 
     char plain[256];
     int n = snprintf(plain, sizeof(plain),
-                     "TASK_RESULT|%d|%d|%d|%d",
+                     "TASK_RESULT|%d|%d|%d|%d|%d",
                      task->id,
                      worker->id,
                      task->exit_status,
-                     (int)task->state);
+                     (int)task->state,
+                     task->epoch);
 
     if (n <= 0 || (size_t)n >= sizeof(plain))
     {

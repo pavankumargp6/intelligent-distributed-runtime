@@ -89,6 +89,16 @@ struct Task
      */
     int attempt;
 
+    /*
+     * Epoch/fencing token for this dispatch attempt.
+     *
+     * Incremented by the coordinator each time the task is
+     * dispatched. Included in TASK_ASSIGN, echoed back in
+     * TASK_ACCEPT and TASK_RESULT. A result from a stale epoch
+     * (e.g., from a previous dispatch attempt) is rejected.
+     */
+    int epoch;
+
     int pid;
     int exit_status;
 };

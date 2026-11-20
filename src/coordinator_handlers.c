@@ -189,6 +189,13 @@ static int build_task_assign(const struct Task *task,
                              task->timeout_seconds);
     if (offset == 0) return 0;
 
+    offset = wire_append_delimiter(buffer, buffer_size, offset);
+    if (offset == 0) return 0;
+
+    offset = wire_append_int(buffer, buffer_size, offset,
+                             task->epoch);
+    if (offset == 0) return 0;
+
     return 1;
 }
 
@@ -704,12 +711,20 @@ int coordinator_handle_task_accept(struct Runtime *runtime,
     const char *cursor = message + prefix_length;
 
     long task_id = 0;
+    long epoch = 0;
 
     if (!wire_read_int(&cursor, &task_id) || task_id <= 0)
     {
         pool_send_message(conn, "TASK_ACCEPT_REJECT|-1|bad_id");
         return 0;
     }
+
+    /*
+     * Read epoch (optional for backward compatibility).
+     * If not present, treat as epoch 0.
+     */
+    wire_read_delimiter(&cursor);
+    wire_read_int(&cursor, &epoch);
 
     struct Task task;
     int worker_id = -1;
@@ -725,6 +740,29 @@ int coordinator_handle_task_accept(struct Runtime *runtime,
         char reject[64];
         int n = snprintf(reject, sizeof(reject),
                          "TASK_ACCEPT_REJECT|%ld|unknown_task",
+                         task_id);
+        if (n > 0 && (size_t)n < sizeof(reject))
+        {
+            pool_send_message(conn, reject);
+        }
+        return 0;
+    }
+
+    /*
+     * Validate epoch: the accept must match the task's epoch.
+     * This rejects stale accepts from previous dispatch attempts.
+     */
+    if (task.epoch != (int)epoch)
+    {
+        log_warn("task_accept_epoch_mismatch",
+                 "TASK_ACCEPT for task %ld: expected epoch %d, got %ld",
+                 task_id,
+                 task.epoch,
+                 epoch);
+
+        char reject[64];
+        int n = snprintf(reject, sizeof(reject),
+                         "TASK_ACCEPT_REJECT|%ld|epoch_mismatch",
                          task_id);
         if (n > 0 && (size_t)n < sizeof(reject))
         {
@@ -794,15 +832,17 @@ int coordinator_handle_task_result(struct Runtime *runtime,
     int worker_id = -1;
     int exit_status = -1;
     int state = -1;
+    int epoch = 0;
 
     int fields = sscanf(message,
-                        "TASK_RESULT|%d|%d|%d|%d",
+                        "TASK_RESULT|%d|%d|%d|%d|%d",
                         &task_id,
                         &worker_id,
                         &exit_status,
-                        &state);
+                        &state,
+                        &epoch);
 
-    if (fields != 4)
+    if (fields < 4)
     {
         log_warn("result_malformed",
                  "Malformed TASK_RESULT: %s",
@@ -877,6 +917,24 @@ int coordinator_handle_task_result(struct Runtime *runtime,
                  task_id,
                  original_worker,
                  worker_id);
+
+        pool_send_message(conn, "TASK_RESULT_REJECT");
+        return 0;
+    }
+
+    /*
+     * Validate epoch: the result must match the task's epoch.
+     * This rejects stale results from previous dispatch attempts
+     * (e.g., a worker that was slow to respond, or a network
+     * partition that caused a duplicate dispatch).
+     */
+    if (task.epoch != epoch)
+    {
+        log_warn("result_epoch_mismatch",
+                 "TASK_RESULT for task %d: expected epoch %d, got %d",
+                 task_id,
+                 task.epoch,
+                 epoch);
 
         pool_send_message(conn, "TASK_RESULT_REJECT");
         return 0;

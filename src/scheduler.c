@@ -86,6 +86,23 @@ int schedule_next_task(struct Scheduler *scheduler,
         (*selected_worker)->id;
 
     /*
+     * Increment the worker's epoch and store it in the task.
+     * This fencing token is included in TASK_ASSIGN, echoed back
+     * in TASK_ACCEPT and TASK_RESULT to reject stale responses
+     * from previous dispatch attempts.
+     */
+    task->epoch = worker_increment_epoch(scheduler->registry,
+                                         (*selected_worker)->id);
+    if (task->epoch < 0) {
+        /* Should not happen: worker was just verified live. */
+        worker_release_slot(scheduler->registry,
+                            (*selected_worker)->id);
+        submit_task(scheduler->manager, task);
+        *selected_worker = NULL;
+        return 0;
+    }
+
+    /*
      * A suitable worker was found.
      */
     return 1;
@@ -152,6 +169,17 @@ int schedule_next_task_for_worker(struct Scheduler *scheduler,
 
             dequeue_task(queue, task);
             task->assigned_worker_id = asking->id;
+
+            /*
+             * Increment the worker's epoch and store it in the task.
+             */
+            task->epoch = worker_increment_epoch(scheduler->registry,
+                                                 asking->id);
+            if (task->epoch < 0) {
+                worker_release_slot(scheduler->registry, asking->id);
+                return 0;
+            }
+
             *selected_worker = asking;
             return 1;
         }
