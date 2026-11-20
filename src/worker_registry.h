@@ -72,6 +72,17 @@ struct WorkerRegistryEntry
      * the worker's registration or heartbeat.
      */
     int max_running_tasks;
+
+    /*
+     * Epoch/fencing token for the worker.
+     *
+     * Incremented by the coordinator each time a task is
+     * dispatched to this worker. Used to reject stale
+     * TASK_ACCEPT and TASK_RESULT messages from previous
+     * dispatch attempts (e.g., if a worker restarts or
+     * a network partition occurs).
+     */
+    int epoch;
 };
 
 struct WorkerRegistry
@@ -203,5 +214,26 @@ int worker_update_load(
     int worker_id,
     int running_tasks,
     int max_running_tasks
+);
+
+/*
+ * Get the worker's current epoch.
+ *
+ * Returns the epoch value, or -1 if the worker does not exist.
+ */
+int worker_get_epoch(
+    struct WorkerRegistry *registry,
+    int worker_id
+);
+
+/*
+ * Increment and return the worker's epoch.
+ *
+ * Called by the scheduler when dispatching a task to this worker.
+ * Returns the new epoch value, or -1 if the worker does not exist.
+ */
+int worker_increment_epoch(
+    struct WorkerRegistry *registry,
+    int worker_id
 );
 #endif
