@@ -389,14 +389,23 @@ next. The phases and exit criteria are in
 
 | Phase | Focus |
 |---|---|
+
 | 0 | Contract, architecture, threat model, release policy (done) |
+
 | 1 | WAL 2.0: snapshots, segments, checksums, recovery policy (done, v0.2.0) |
+
 | 2 | Live scheduling, worker lifecycle, per-worker identity and epochs (in progress, v0.3.0) |
+
 | 3 | Persistent connections, scale, reproducible benchmarks |
+
 | 4 | TLS, quotas, sandbox, parser fuzzing |
+
 | 5 | Prometheus, config, CLI, packaging, runbooks |
+
 | 6 | Raft high availability and chaos testing |
+
 | 7 | Evidence, releases, community |
+
 
 ## License
 
