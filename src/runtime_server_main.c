@@ -2,9 +2,8 @@
 
 #include "runtime.h"
 #include "runtime_server.h"
+#include "runtime_endpoint.h"
 #include "log.h"
-
-#define RUNTIME_SERVER_PORT 5001
 
 int main(void)
 {
@@ -14,6 +13,20 @@ int main(void)
      */
     setvbuf(stdout, NULL, _IOLBF, 0);
     log_init();
+
+    /*
+     * Resolve the listening port before touching any durable
+     * state. An invalid IDR_PORT is a configuration error we
+     * want to reject before opening the WAL.
+     */
+    int port = runtime_listen_port();
+
+    if (port < 0)
+    {
+        log_error("coordinator_port_invalid",
+                  "IDR_PORT must be an integer between 1 and 65535.");
+        return 1;
+    }
 
     struct TaskManager task_manager;
     struct WorkerPool worker_pool;
@@ -47,7 +60,7 @@ int main(void)
      */
     if (!start_runtime_server(
             &runtime,
-            RUNTIME_SERVER_PORT))
+            port))
     {
         log_error("coordinator_start_failed", "Runtime server failed.");
 

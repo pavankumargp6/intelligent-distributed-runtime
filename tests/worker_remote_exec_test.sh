@@ -22,7 +22,7 @@ COORD_BIN=/tmp/idr_fake_coordinator_test
 echo "===== Building fake coordinator ====="
 gcc -Wall -Wextra -Isrc \
     tests/fake_coordinator.c \
-    src/network_protocol.c \
+    src/network_protocol.c src/runtime_endpoint.c \
     -o "$COORD_BIN" || exit 1
 
 echo "===== Building worker agent ====="
@@ -38,7 +38,7 @@ gcc -Wall -Wextra -Isrc \
     src/wire_fields.c \
     src/task_executor.c \
     src/task_metrics.c \
-    src/network_protocol.c \
+    src/network_protocol.c src/runtime_endpoint.c \
     -o "$WORKER_BIN" || exit 1
 
 echo "===== Starting fake coordinator ====="

@@ -174,9 +174,10 @@ execution of non-idempotent tasks (they become `TASK_UNKNOWN`).
 
 Status: in progress (v0.3.0 development).
 
-- [ ] Use worker slots as the primary admission control
-- [ ] Report running tasks, free slots, load, and epoch in heartbeats
-- [ ] Reserve capacity on dispatch and release it on result/timeout/reap
+- [x] Use worker slots as the primary admission control
+- [x] Report running tasks and capacity (free slots) in heartbeats
+- [ ] Report CPU/memory load in heartbeats (registration-time only in v0.3.0)
+- [x] Reserve capacity on dispatch and release it on result/timeout/reap
 - [ ] Replace fixed task and worker structures with dynamic structures
 - [ ] Make queue and in-flight limits configurable
 - [ ] Add fair-share and priority scheduling
@@ -186,9 +187,9 @@ Status: in progress (v0.3.0 development).
 - [ ] Enforce per-task execution timeouts and process-group cleanup
 - [ ] Retry result reporting with backoff and duplicate suppression
 - [ ] Add per-worker enrollment credentials
-- [ ] Add worker epochs/fencing tokens to assignments and results
-- [ ] Validate that `TASK_ACCEPT` and `TASK_RESULT` come from the assigned worker
-- [ ] Make the coordinator endpoint configurable for clients and workers
+- [x] Add worker epochs/fencing tokens to assignments and results
+- [x] Validate that `TASK_ACCEPT` and `TASK_RESULT` come from the assigned worker
+- [x] Make the coordinator endpoint configurable for clients and workers
 - [x] Make QUERY return `QUERY_PENDING` for queued tasks
 
 Exit criteria: 100 workers; 1k concurrent tasks; no worker exceeds its

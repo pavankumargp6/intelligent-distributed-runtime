@@ -14,8 +14,15 @@
 #include "task_executor.h"
 #include "log.h"
 #include "worker_registry.h"
+#include "runtime_endpoint.h"
 
-#define RUNTIME_ADDRESS "127.0.0.1"
+/*
+ * Coordinator host this agent dials. Resolved from
+ * IDR_COORDINATOR_HOST in main() and inherited by forked task
+ * children, so it is safe to use from run_task_in_child().
+ */
+static const char *g_runtime_host = DEFAULT_RUNTIME_HOST;
+
 #define DEFAULT_AGENT_INTERVAL_SECONDS 0
 #define RETRY_INTERVAL_SECONDS 3
 
@@ -131,7 +138,7 @@ static void run_task_in_child(const struct Worker *worker,
              task.state);
 
     if (!send_task_result_to_runtime(worker,
-                                     RUNTIME_ADDRESS,
+                                     g_runtime_host,
                                      &task))
     {
         log_error("task_result_report_failed",
@@ -151,6 +158,23 @@ int main(int argc, char *argv[])
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
     log_init();
+
+    /*
+     * Resolve the coordinator endpoint once. The host is used by
+     * every outbound call (registration, heartbeat, task poll,
+     * accept, result); the port is read by the client helpers.
+     */
+    g_runtime_host = runtime_connect_host();
+
+    int connect_port = runtime_connect_port();
+
+    if (connect_port < 0)
+    {
+        fprintf(stderr,
+                "IDR_COORDINATOR_PORT must be an integer "
+                "between 1 and 65535.\n");
+        return 1;
+    }
 
     if (argc != 2)
     {
@@ -208,6 +232,9 @@ int main(int argc, char *argv[])
     printf("             WORKER AGENT\n");
     printf("========================================\n");
     printf("Worker ID        : %d\n", worker.id);
+    printf("Coordinator      : %s:%d\n",
+           g_runtime_host,
+           connect_port);
     printf("Total CPU        : %.2f%%\n",
            worker.resources.total_cpu_percent);
     printf("Available CPU    : %.2f%%\n",
@@ -231,7 +258,7 @@ int main(int argc, char *argv[])
                      worker.id);
 
             if (register_worker_with_runtime_with_load(&worker,
-                                             RUNTIME_ADDRESS,
+                                             g_runtime_host,
                                              running_tasks,
                                              max_running_tasks))
             {
@@ -256,7 +283,7 @@ int main(int argc, char *argv[])
                   worker.id);
 
         if (!send_worker_heartbeat_with_load(&worker,
-                                              RUNTIME_ADDRESS,
+                                              g_runtime_host,
                                               running_tasks,
                                               max_running_tasks))
         {
@@ -278,7 +305,7 @@ int main(int argc, char *argv[])
         log_debug("task_requesting", "Requesting task from runtime...");
 
         if (!request_task_from_runtime(&worker,
-                                       RUNTIME_ADDRESS,
+                                       g_runtime_host,
                                        &task,
                                        &has_task))
         {
@@ -300,7 +327,7 @@ int main(int argc, char *argv[])
                  task.epoch);
 
         if (!send_task_accept_to_runtime(&worker,
-                                         RUNTIME_ADDRESS,
+                                         g_runtime_host,
                                          task.id,
                                          task.epoch))
         {

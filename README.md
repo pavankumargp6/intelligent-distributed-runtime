@@ -352,9 +352,11 @@ than live load balancing.
 
 *   The coordinator is a single process and a single point of failure.
     Raft is a Phase 6 item, not an implemented feature.
-*   Clients, worker agents, and tests hard-code `127.0.0.1:5001`.
-    `IDR_BIND_ADDR` changes only the coordinator's listening address, so
-    remote workers cannot connect without rebuilding.
+*   In v0.3.0 the listening endpoint is configurable: `IDR_BIND_ADDR`
+    sets the bind address and `IDR_PORT` sets the listening port.
+    Clients and workers dial `IDR_COORDINATOR_HOST` (default
+    `127.0.0.1`) and `IDR_COORDINATOR_PORT` (default `5001`). The
+    metrics listener remains fixed at `127.0.0.1:8080`.
 *   The metrics listener performs a blocking `recv()` after `accept()`,
     so a local client that connects and sends nothing can stall the
     coordinator event loop.
