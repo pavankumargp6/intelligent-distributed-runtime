@@ -48,11 +48,12 @@ flowchart LR
 ```
 
 The current deployment model is one coordinator process and one or more
-worker agent processes on the same host. The coordinator binds to
-`127.0.0.1:5001`; `IDR_BIND_ADDR` changes the address, but the port is
-compiled in. Clients, worker agents, and test programs hard-code
-`127.0.0.1` and port 5001, so a remote worker cannot connect without a
-rebuild. Making the endpoint configurable is a Phase 2 item.
+worker agent processes. In v0.3.0 the endpoint is configurable:
+`IDR_BIND_ADDR` and `IDR_PORT` select where the coordinator listens, and
+clients and workers dial `IDR_COORDINATOR_HOST` and
+`IDR_COORDINATOR_PORT`. The defaults remain `127.0.0.1:5001`. This makes
+it possible to run clients and workers on different hosts; transport is
+still plaintext, so TLS or a trusted network is required across hosts.
 
 ## 4. Components
 

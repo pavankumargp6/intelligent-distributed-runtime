@@ -11,14 +11,23 @@
 #include "wire_fields.h"
 #include "auth.h"
 #include "auth_config.h"
+#include "runtime_endpoint.h"
 #include "log.h"
-
-#define RUNTIME_SERVER_PORT 5001
 
 static int connect_to_runtime(const char *runtime_address)
 {
     if (runtime_address == NULL)
     {
+        return -1;
+    }
+
+    int port = runtime_connect_port();
+
+    if (port < 0)
+    {
+        fprintf(stderr,
+                "IDR_COORDINATOR_PORT must be an integer "
+                "between 1 and 65535.\n");
         return -1;
     }
 
@@ -40,7 +49,7 @@ static int connect_to_runtime(const char *runtime_address)
         return -1;
     }
 
-    addr.sin_port = htons(RUNTIME_SERVER_PORT);
+    addr.sin_port = htons((unsigned short)port);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {

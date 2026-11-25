@@ -20,15 +20,24 @@
 #include "network_protocol.h"
 #include "auth.h"
 #include "auth_config.h"
-
-#define RUNTIME_ADDRESS "127.0.0.1"
-#define RUNTIME_SERVER_PORT 5001
+#include "runtime_endpoint.h"
 
 int main(int argc, char *argv[])
 {
     if (argc != 2)
     {
         fprintf(stderr, "Usage: %s <task_id>\n", argv[0]);
+        return 2;
+    }
+
+    const char *runtime_address = runtime_connect_host();
+    int runtime_port = runtime_connect_port();
+
+    if (runtime_port < 0)
+    {
+        fprintf(stderr,
+                "IDR_COORDINATOR_PORT must be an integer "
+                "between 1 and 65535.\n");
         return 2;
     }
 
@@ -55,13 +64,13 @@ int main(int argc, char *argv[])
 
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
-    if (inet_pton(AF_INET, RUNTIME_ADDRESS, &addr.sin_addr) <= 0)
+    if (inet_pton(AF_INET, runtime_address, &addr.sin_addr) <= 0)
     {
         perror("inet_pton");
         close(fd);
         return 1;
     }
-    addr.sin_port = htons(RUNTIME_SERVER_PORT);
+    addr.sin_port = htons((unsigned short)runtime_port);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {

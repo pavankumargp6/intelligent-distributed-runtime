@@ -35,8 +35,8 @@
 #include "wire_fields.h"
 #include "auth.h"
 #include "auth_config.h"
+#include "runtime_endpoint.h"
 
-#define RUNTIME_SERVER_PORT 5001
 #define MAX_RETRIES_PER_SUBMIT 5000
 #define RETRY_SLEEP_NS 500000L   /* 0.5 ms */
 
@@ -76,7 +76,18 @@ static int connect_to_server(const char *host)
         return -1;
     }
 
-    addr.sin_port = htons(RUNTIME_SERVER_PORT);
+    int port = runtime_connect_port();
+
+    if (port < 0)
+    {
+        fprintf(stderr,
+                "IDR_COORDINATOR_PORT must be an integer "
+                "between 1 and 65535.\n");
+        close(fd);
+        return -1;
+    }
+
+    addr.sin_port = htons((unsigned short)port);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {

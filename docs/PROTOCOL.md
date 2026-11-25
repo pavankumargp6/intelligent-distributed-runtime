@@ -567,6 +567,9 @@ coordinator:
 | `IDR_CLIENT_SECRET` | coordinator, client | shared secret for client-channel messages; 32 bytes minimum in secure mode |
 | `IDR_INSECURE` | coordinator, worker, client | `1` disables authentication entirely; the coordinator additionally requires a loopback bind address in this mode |
 | `IDR_BIND_ADDR` | coordinator | bind address; default `127.0.0.1` |
+| `IDR_PORT` | coordinator | listening port; default `5001`. Values outside 1-65535 are refused at startup |
+| `IDR_COORDINATOR_HOST` | worker, client | coordinator address to dial; default `127.0.0.1` (v0.3.0) |
+| `IDR_COORDINATOR_PORT` | worker, client | coordinator port to dial; default `5001` (v0.3.0) |
 | `IDR_WAL_PATH` | coordinator | write-ahead log base path; segments, snapshots, and the manifest are derived from it (default `./idr-wal.log`) |
 
 In secure mode (the default), the coordinator refuses to start

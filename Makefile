@@ -5,7 +5,7 @@ CFLAGS   ?= -Wall -Wextra -Isrc
 BUILD    ?= build
 
 COMMON_SRCS = \
-    src/network_protocol.c \
+    src/network_protocol.c src/runtime_endpoint.c \
     src/wire_fields.c \
     src/sha256.c \
     src/hmac.c \
@@ -221,14 +221,14 @@ test:
 	@mkdir -p $(BUILD)
 	@echo "===== connection pool unit test ====="
 	$(CC) $(CFLAGS) tests/connection_pool_test.c \
-	    src/connection_pool.c src/network_protocol.c src/log.c \
+	    src/connection_pool.c src/network_protocol.c src/runtime_endpoint.c src/log.c \
 	    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
 	    -o $(BUILD)/connection_pool_test
 	$(BUILD)/connection_pool_test
 	@echo ""
 	@echo "===== network protocol unit test ====="
 	$(CC) $(CFLAGS) src/network_protocol_test.c \
-	    src/network_protocol.c -pthread \
+	    src/network_protocol.c src/runtime_endpoint.c -pthread \
 	    -o $(BUILD)/network_protocol_test
 	$(BUILD)/network_protocol_test
 	@echo ""
@@ -327,6 +327,9 @@ test:
 	@echo ""
 	@echo "===== dispatch_timeout_test.sh ====="
 	bash tests/dispatch_timeout_test.sh
+	@echo ""
+	@echo "===== endpoint_config_test.sh ====="
+	bash tests/endpoint_config_test.sh
 	@echo ""
 	@echo "===== wal_recovery_test.sh ====="
 	bash tests/wal_recovery_test.sh
