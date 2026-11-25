@@ -60,8 +60,9 @@ struct WorkerRegistryEntry
     enum WorkerStatus status;
 
     /*
-     * Tasks this worker is currently executing,
-     * as last reported by the worker.
+     * Tasks this worker is currently executing, as counted by
+     * the coordinator: incremented when a slot is reserved at
+     * dispatch and decremented on result, timeout, or reap.
      */
     int running_tasks;
 
@@ -203,11 +204,14 @@ int worker_release_slot(
 );
 
 /*
- * Set the worker's reported running count and capacity.
+ * Update the worker's capacity and liveness from a
+ * registration or heartbeat.
  *
- * Used by the heartbeat handler so the coordinator's view of
- * the worker's load tracks the worker's own view. Returns 1
- * if the worker existed, 0 otherwise.
+ * The reported running count is advisory: admission is driven
+ * by coordinator-owned reservations (worker_reserve_slot /
+ * worker_release_slot), because a worker report can lag a
+ * dispatch it has not polled yet. Returns 1 if the worker
+ * existed, 0 otherwise.
  */
 int worker_update_load(
     struct WorkerRegistry *registry,

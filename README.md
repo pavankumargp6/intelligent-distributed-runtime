@@ -360,13 +360,16 @@ than live load balancing.
 *   The metrics listener performs a blocking `recv()` after `accept()`,
     so a local client that connects and sends nothing can stall the
     coordinator event loop.
-*   The worker parent installs `SIGCHLD` with `SIG_IGN` and never waits
-    for a task child. There is no child cap; concurrency is bounded only
-    by the coordinator's 64-entry in-flight table.
-*   If a worker heartbeats normally but its task child hangs, only the
-    task's `timeout_seconds` stops it. A task with timeout `0` can run
-    indefinitely.
-*   If the worker fails to start or wait for a task after sending
+*   In v0.3.0 the worker agent installs a SIGCHLD handler that reaps
+    exited task children and tracks the live child count in
+    `g_child_count`. The previous strategy of `SIG_IGN` + a monotonically
+    increasing counter is gone. Concurrency is still bounded by the
+    coordinator's per-worker slot reservation (`worker_reserve_slot` /
+    `worker_release_slot`), and the agent also refuses to poll for
+    additional tasks once it reaches `IDR_WORKER_MAX_TASKS` live
+    children. A task with `timeout_seconds=0` can still run indefinitely
+    -- the cap is a capacity bound, not a timeout.
+*   If a worker fails to start or wait for a task after sending
     `TASK_ACCEPT`, v0.3.0 reports `TASK_FAILED` instead of exiting
     silently. If that result report itself fails (for example, the
     coordinator is unreachable), the task stays in flight until the

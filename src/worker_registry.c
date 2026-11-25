@@ -32,10 +32,15 @@ int register_worker(
             registry->workers[i].last_seen = time(NULL);
             registry->workers[i].status = WORKER_ACTIVE;
             /*
-             * Preserve running_tasks and max_running_tasks
-             * from any prior heartbeat unless the worker
-             * explicitly reports them later.
+             * A re-registration is proof that the previous
+             * process is gone, so it cannot still be running
+             * any of the tasks the coordinator reserved for
+             * it. The caller reaps those tasks before calling
+             * here; resetting the reservation count keeps a
+             * leaked reservation from stranding the new
+             * process.
              */
+            registry->workers[i].running_tasks = 0;
             return 1;
         }
     }
@@ -254,8 +259,20 @@ int worker_update_load(
 
     for (int i = 0; i < registry->count; i++) {
         if (registry->workers[i].worker.id == worker_id) {
-            registry->workers[i].running_tasks =
-                running_tasks >= 0 ? running_tasks : 0;
+            /*
+             * running_tasks is owned by the coordinator: it
+             * counts slots reserved at dispatch and released
+             * at result, timeout, or reap. A worker-reported
+             * count describes its live children and can
+             * legitimately lag a dispatch the worker has not
+             * polled yet. Adopting the report would
+             * oversubscribe the worker in that window (and,
+             * before the agent reaped children, a stale
+             * report could strand it forever). Only the
+             * capacity and liveness come from a heartbeat.
+             */
+            (void)running_tasks;
+
             registry->workers[i].max_running_tasks =
                 max_running_tasks > 0 ? max_running_tasks : DEFAULT_WORKER_MAX_TASKS;
             registry->workers[i].last_seen = time(NULL);
