@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 
 #include "worker.h"
 #include "worker_registration_client.h"
@@ -25,6 +26,39 @@ static const char *g_runtime_host = DEFAULT_RUNTIME_HOST;
 
 #define DEFAULT_AGENT_INTERVAL_SECONDS 0
 #define RETRY_INTERVAL_SECONDS 3
+
+/*
+ * Number of task children that are still alive.
+ *
+ * Incremented by the parent immediately before fork() and
+ * decremented by the SIGCHLD handler. The increment happens
+ * before the child can possibly exit, so the handler never
+ * sees a child it did not count.
+ */
+static volatile sig_atomic_t g_child_count = 0;
+
+/*
+ * Reap every exited child and keep the live count accurate.
+ *
+ * waitpid() and this bookkeeping are async-signal-safe. The
+ * handler deliberately does not log: logging from a signal
+ * handler can deadlock on the log mutex.
+ */
+static void reap_task_children(int signo)
+{
+    (void)signo;
+    int saved_errno = errno;
+
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+    {
+        if (g_child_count > 0)
+        {
+            g_child_count--;
+        }
+    }
+
+    errno = saved_errno;
+}
 
 /*
  * Configurable agent cycle interval. The default is 0, so the
@@ -192,7 +226,25 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    signal(SIGCHLD, SIG_IGN);
+    /*
+     * The worker agent forks one child per task. The SIGCHLD
+     * handler reaps children as they exit and keeps
+     * g_child_count equal to the number of tasks this agent is
+     * actually running. That count - not a monotonically
+     * increasing counter - is what the coordinator sees in
+     * heartbeats.
+     */
+    struct sigaction child_action;
+    memset(&child_action, 0, sizeof(child_action));
+    child_action.sa_handler = reap_task_children;
+    sigemptyset(&child_action.sa_mask);
+    child_action.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+
+    if (sigaction(SIGCHLD, &child_action, NULL) != 0)
+    {
+        perror("sigaction");
+        return 1;
+    }
 
     struct Worker worker;
 
@@ -203,15 +255,12 @@ int main(int argc, char *argv[])
     }
 
     /*
-     * The worker agent forks one child per task and never waits
-     * on them (SIGCHLD is SIG_IGN, so the kernel reaps them). The
-     * running count is therefore the number of children that have
-     * been forked but whose results have not yet been reported.
-     * It is reported to the coordinator on every heartbeat so the
-     * coordinator can enforce per-worker capacity.
+     * The count of live task children is the worker-side view
+     * of its load. The coordinator remains the admission
+     * authority (it reserves slots at dispatch), but the agent
+     * also refuses to poll for another task once it is at its
+     * local cap.
      */
-    int running_tasks = 0;
-
     int max_running_tasks = DEFAULT_WORKER_MAX_TASKS;
 
     const char *env_max = getenv("IDR_WORKER_MAX_TASKS");
@@ -259,7 +308,7 @@ int main(int argc, char *argv[])
 
             if (register_worker_with_runtime_with_load(&worker,
                                              g_runtime_host,
-                                             running_tasks,
+                                             (int)g_child_count,
                                              max_running_tasks))
             {
                 registered = 1;
@@ -284,7 +333,7 @@ int main(int argc, char *argv[])
 
         if (!send_worker_heartbeat_with_load(&worker,
                                               g_runtime_host,
-                                              running_tasks,
+                                              (int)g_child_count,
                                               max_running_tasks))
         {
             log_warn("heartbeat_failed",
@@ -298,6 +347,21 @@ int main(int argc, char *argv[])
         }
 
         log_debug("heartbeat_acked", "Heartbeat acknowledged.");
+
+        /*
+         * Do not ask for more work than this agent can run.
+         * The coordinator also enforces the cap, but checking
+         * locally avoids a pointless round trip on every cycle.
+         */
+        if ((int)g_child_count >= max_running_tasks)
+        {
+            log_debug("worker_at_capacity",
+                      "Worker %d at capacity (%d/%d).",
+                      worker.id,
+                      (int)g_child_count,
+                      max_running_tasks);
+            continue;
+        }
 
         struct Task task;
         int has_task = 0;
@@ -337,14 +401,19 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        running_tasks++;
+        /*
+         * Count the child before fork() so a very short-lived
+         * child cannot exit and be reaped before the parent has
+         * counted it. The handler decrements the same counter.
+         */
+        g_child_count++;
 
         pid_t child = fork();
 
         if (child < 0)
         {
             log_error("fork_failed", "fork: %s", strerror(errno));
-            running_tasks--;
+            g_child_count--;
             continue;
         }
 

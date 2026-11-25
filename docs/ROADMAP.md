@@ -183,7 +183,7 @@ Status: in progress (v0.3.0 development).
 - [ ] Add fair-share and priority scheduling
 - [ ] Add queue high-water marks and explicit backpressure
 - [x] Report `TASK_FAILED` when a worker cannot start or wait for an accepted task
-- [ ] Add a worker-side child supervisor (`waitpid`, SIGCHLD, child cap)
+- [x] Add a worker-side child supervisor (`waitpid`, SIGCHLD, child cap)
 - [ ] Enforce per-task execution timeouts and process-group cleanup
 - [ ] Retry result reporting with backoff and duplicate suppression
 - [ ] Add per-worker enrollment credentials
