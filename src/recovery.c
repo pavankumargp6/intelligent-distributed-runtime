@@ -1171,7 +1171,7 @@ int recovery_take_snapshot(struct Runtime *runtime,
     snapshot.history_count =
         coordinator_history_count(&table->history);
 
-    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (table->entries[i].in_use)
         {
@@ -1200,7 +1200,7 @@ int recovery_take_snapshot(struct Runtime *runtime,
 
     size_t written_inflight = 0;
 
-    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (!table->entries[i].in_use)
         {
@@ -1219,7 +1219,7 @@ int recovery_take_snapshot(struct Runtime *runtime,
     {
         struct HistoryRecord record;
 
-        if (!coordinator_history_get(&table->history, i, &record))
+        if (!coordinator_history_get_by_index(&table->history, i, &record))
         {
             buffer_free(&body);
             log_error("snapshot_history_get_failed",
@@ -2074,9 +2074,9 @@ static int materialize_recovery(struct Runtime *runtime,
          * earlier attempt's RESULT (for example, a duplicate
          * submission that was accepted before a crash).
          */
-        if (coordinator_history_lookup(&table->history,
-                                       entry->task_id,
-                                       NULL))
+        if (coordinator_lookup_completed(table,
+                                           entry->task_id,
+                                           NULL, NULL, NULL))
         {
             continue;
         }
@@ -2467,9 +2467,9 @@ int recovery_start(struct Runtime *runtime,
     {
         struct ReplayResult *result = &state.results[i];
 
-        if (coordinator_history_lookup(&table->history,
-                                       result->task_id,
-                                       NULL))
+        if (coordinator_lookup_completed(table,
+                                           result->task_id,
+                                           NULL, NULL, NULL))
         {
             continue;
         }

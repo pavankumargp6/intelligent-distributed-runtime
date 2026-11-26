@@ -8,7 +8,9 @@ struct TaskManager
     struct TaskQueue queue;
 };
 
-void initialize_task_manager(struct TaskManager *manager);
+void initialize_task_manager(
+    struct TaskManager *manager,
+    size_t queue_capacity);
 
 int submit_task(struct TaskManager *manager,
                 struct Task *task);

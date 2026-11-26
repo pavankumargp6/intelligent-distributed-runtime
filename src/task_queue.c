@@ -1,14 +1,46 @@
 #include <stddef.h>
+#include <stdlib.h>
 
 #include "task_queue.h"
 
-void initialize_task_queue(struct TaskQueue *queue)
+int initialize_task_queue(
+    struct TaskQueue *queue,
+    size_t capacity)
+{
+    if (queue == NULL || capacity == 0)
+    {
+        return 0;
+    }
+
+    queue->tasks = calloc(capacity, sizeof(struct Task));
+    if (queue->tasks == NULL)
+    {
+        queue->capacity = 0;
+        queue->front = 0;
+        queue->rear = 0;
+        queue->count = 0;
+        return 0;
+    }
+
+    queue->capacity = capacity;
+    queue->front = 0;
+    queue->rear = 0;
+    queue->count = 0;
+
+    return 1;
+}
+
+void destroy_task_queue(
+    struct TaskQueue *queue)
 {
     if (queue == NULL)
     {
         return;
     }
 
+    free(queue->tasks);
+    queue->tasks = NULL;
+    queue->capacity = 0;
     queue->front = 0;
     queue->rear = 0;
     queue->count = 0;
@@ -30,7 +62,7 @@ int enqueue_task(struct TaskQueue *queue,
     queue->tasks[queue->rear] = *task;
 
     queue->rear =
-        (queue->rear + 1) % TASK_QUEUE_CAPACITY;
+        (queue->rear + 1) % (int)queue->capacity;
 
     queue->count++;
 
@@ -53,7 +85,7 @@ int dequeue_task(struct TaskQueue *queue,
     *task = queue->tasks[queue->front];
 
     queue->front =
-        (queue->front + 1) % TASK_QUEUE_CAPACITY;
+        (queue->front + 1) % (int)queue->capacity;
 
     queue->count--;
 
@@ -77,7 +109,7 @@ int is_task_queue_full(struct TaskQueue *queue)
         return 0;
     }
 
-    return queue->count == TASK_QUEUE_CAPACITY;
+    return queue->count == (int)queue->capacity;
 }
 
 int task_queue_peek(const struct TaskQueue *queue,
@@ -90,7 +122,7 @@ int task_queue_peek(const struct TaskQueue *queue,
         return 0;
     }
 
-    int position = (queue->front + index) % TASK_QUEUE_CAPACITY;
+    int position = (queue->front + index) % (int)queue->capacity;
 
     *task = queue->tasks[position];
 
@@ -107,7 +139,7 @@ int task_queue_contains(const struct TaskQueue *queue,
 
     for (int i = 0; i < queue->count; i++)
     {
-        int position = (queue->front + i) % TASK_QUEUE_CAPACITY;
+        int position = (queue->front + i) % (int)queue->capacity;
 
         if (queue->tasks[position].id == task_id)
         {

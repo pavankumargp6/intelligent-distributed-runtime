@@ -1183,7 +1183,7 @@ int coordinator_handle_status(struct Runtime *runtime,
 
     int inflight = 0;
 
-    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (table->entries[i].in_use)
         {
@@ -1248,7 +1248,7 @@ int coordinator_reap_dead_worker_tasks(struct Runtime *runtime,
     int reaped = 0;
 
     int i;
-    for (i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (!table->entries[i].in_use)
         {
@@ -1303,7 +1303,7 @@ int coordinator_reap_unaccepted_tasks(struct Runtime *runtime,
     time_t now = time(NULL);
     int reaped = 0;
 
-    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (!table->entries[i].in_use)
         {
@@ -1359,7 +1359,7 @@ int coordinator_reap_worker_tasks(struct Runtime *runtime,
 
     int reaped = 0;
 
-    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (!table->entries[i].in_use)
         {
@@ -1416,7 +1416,7 @@ int coordinator_handle_metrics(struct Runtime *runtime,
     }
 
     int inflight = 0;
-    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (table->entries[i].in_use)
         {

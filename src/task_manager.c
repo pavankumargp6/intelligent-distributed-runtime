@@ -1,15 +1,18 @@
 #include <stddef.h>
 
 #include "task_manager.h"
+#include "runtime_limits.h"
 
-void initialize_task_manager(struct TaskManager *manager)
+void initialize_task_manager(
+    struct TaskManager *manager,
+    size_t queue_capacity)
 {
     if (manager == NULL)
     {
         return;
     }
 
-    initialize_task_queue(&manager->queue);
+    initialize_task_queue(&manager->queue, queue_capacity);
 }
 
 int submit_task(struct TaskManager *manager,

@@ -3,6 +3,7 @@
 #include "runtime.h"
 #include "runtime_server.h"
 #include "runtime_endpoint.h"
+#include "runtime_limits.h"
 #include "log.h"
 
 int main(void)
@@ -36,9 +37,13 @@ int main(void)
     /*
      * Initialize runtime subsystems.
      */
-    initialize_worker_pool(&worker_pool);
+    if (!initialize_worker_pool(&worker_pool, runtime_worker_pool_capacity()))
+    {
+        log_error("worker_pool_init_failed", "Failed to allocate worker pool.");
+        return 1;
+    }
 
-    initialize_task_manager(&task_manager);
+    initialize_task_manager(&task_manager, runtime_task_queue_capacity());
 
     initialize_scheduler(
         &scheduler,

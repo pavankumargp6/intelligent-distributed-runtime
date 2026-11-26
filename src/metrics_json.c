@@ -21,7 +21,7 @@ int build_metrics_http_response(struct Runtime *runtime,
     }
 
     int inflight = 0;
-    for (int i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (table->entries[i].in_use)
         {

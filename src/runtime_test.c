@@ -33,7 +33,7 @@ int main(void)
      */
     initialize_worker_pool(&worker_pool);
 
-    initialize_task_manager(&task_manager);
+    initialize_task_manager(&task_manager, runtime_task_queue_capacity());
 
     initialize_scheduler(
         &scheduler,

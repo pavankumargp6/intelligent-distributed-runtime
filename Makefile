@@ -5,7 +5,7 @@ CFLAGS   ?= -Wall -Wextra -Isrc
 BUILD    ?= build
 
 COMMON_SRCS = \
-    src/network_protocol.c src/runtime_endpoint.c \
+    src/network_protocol.c src/runtime_endpoint.c src/runtime_limits.c \
     src/wire_fields.c \
     src/sha256.c \
     src/hmac.c \
@@ -222,6 +222,7 @@ test:
 	@echo "===== connection pool unit test ====="
 	$(CC) $(CFLAGS) tests/connection_pool_test.c \
 	    src/connection_pool.c src/network_protocol.c src/runtime_endpoint.c src/log.c \
+	    src/runtime_limits.c \
 	    src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
 	    -o $(BUILD)/connection_pool_test
 	$(BUILD)/connection_pool_test

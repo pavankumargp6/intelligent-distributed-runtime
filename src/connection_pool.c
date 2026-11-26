@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -10,29 +11,61 @@
 #include "auth.h"
 #include "log.h"
 
-void pool_init(struct ConnectionPool *pool)
+int pool_init(struct ConnectionPool *pool, size_t capacity)
+{
+    if (pool == NULL || capacity == 0)
+    {
+        return 0;
+    }
+
+    pool->conns = calloc(capacity, sizeof(struct Connection));
+    if (pool->conns == NULL)
+    {
+        pool->capacity = 0;
+        pool->count = 0;
+        return 0;
+    }
+
+    pool->capacity = capacity;
+    pool->count = 0;
+
+    for (size_t i = 0; i < capacity; i++)
+    {
+        pool->conns[i].fd = -1;
+    }
+
+    return 1;
+}
+
+void pool_destroy(struct ConnectionPool *pool)
 {
     if (pool == NULL)
     {
         return;
     }
 
-    memset(pool, 0, sizeof(*pool));
-
-    for (int i = 0; i < CONNECTION_POOL_CAPACITY; i++)
+    for (size_t i = 0; i < pool->capacity; i++)
     {
-        pool->conns[i].fd = -1;
+        if (pool->conns[i].fd >= 0)
+        {
+            close(pool->conns[i].fd);
+        }
     }
+
+    free(pool->conns);
+    pool->conns = NULL;
+    pool->capacity = 0;
+    pool->count = 0;
 }
 
 int pool_add(struct ConnectionPool *pool, int fd)
 {
-    if (pool == NULL || fd < 0)
+    if (pool == NULL || fd < 0 || pool->conns == NULL)
     {
         return -1;
     }
 
-    if (pool->count >= CONNECTION_POOL_CAPACITY)
+    if (pool->count >= (int)pool->capacity)
     {
         return -1;
     }
@@ -43,7 +76,7 @@ int pool_add(struct ConnectionPool *pool, int fd)
         return -1;
     }
 
-    for (int i = 0; i < CONNECTION_POOL_CAPACITY; i++)
+    for (size_t i = 0; i < pool->capacity; i++)
     {
         if (pool->conns[i].fd == -1)
         {
@@ -60,7 +93,7 @@ int pool_add(struct ConnectionPool *pool, int fd)
             c->response_secret = NULL;
             c->response_direction = AUTH_DIR_WORKER_TO_COORD;
             pool->count++;
-            return i;
+            return (int)i;
         }
     }
 
@@ -71,7 +104,8 @@ void pool_remove(struct ConnectionPool *pool, int index)
 {
     if (pool == NULL ||
         index < 0 ||
-        index >= CONNECTION_POOL_CAPACITY)
+        (size_t)index >= pool->capacity ||
+        pool->conns == NULL)
     {
         return;
     }
@@ -279,7 +313,7 @@ int pool_flush(struct Connection *conn)
 
 int pool_expire_idle(struct ConnectionPool *pool)
 {
-    if (pool == NULL)
+    if (pool == NULL || pool->conns == NULL)
     {
         return 0;
     }
@@ -287,7 +321,7 @@ int pool_expire_idle(struct ConnectionPool *pool)
     time_t now = time(NULL);
     int expired = 0;
 
-    for (int i = 0; i < CONNECTION_POOL_CAPACITY; i++)
+    for (size_t i = 0; i < pool->capacity; i++)
     {
         struct Connection *c = &pool->conns[i];
 
@@ -300,7 +334,7 @@ int pool_expire_idle(struct ConnectionPool *pool)
 
         if (elapsed > CONNECTION_IDLE_TIMEOUT_SECONDS)
         {
-            pool_remove(pool, i);
+            pool_remove(pool, (int)i);
             expired++;
         }
     }
@@ -312,16 +346,14 @@ int pool_build_pollfds(struct ConnectionPool *pool,
                        struct pollfd *pollfds,
                        int capacity)
 {
-    if (pool == NULL || pollfds == NULL || capacity < 1)
+    if (pool == NULL || pollfds == NULL || capacity < 1 || pool->conns == NULL)
     {
         return 0;
     }
 
     int n = 1;
 
-    for (int i = 0;
-         i < CONNECTION_POOL_CAPACITY && n < capacity;
-         i++)
+    for (size_t i = 0; i < pool->capacity && n < capacity; i++)
     {
         if (pool->conns[i].fd < 0)
         {

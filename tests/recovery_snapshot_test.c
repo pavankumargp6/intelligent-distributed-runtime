@@ -117,13 +117,13 @@ static void init_harness(struct Runtime *runtime,
     memset(runtime, 0, sizeof(*runtime));
     memset(manager, 0, sizeof(*manager));
 
-    initialize_task_manager(manager);
+    initialize_task_manager(manager, 512);
     initialize_runtime_stats(&runtime->stats);
 
     runtime->task_manager = manager;
     runtime->wal.fd = -1;
 
-    coordinator_tasks_init(table);
+    coordinator_tasks_init(table, 64, 64, 100000, 0);
 }
 
 static struct Task make_task(int id, const char *command, int idempotent)

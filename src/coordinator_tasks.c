@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "coordinator_tasks.h"
+#include "runtime_limits.h"
 
 /*
  * Default terminal-result retention.
@@ -212,11 +213,6 @@ int coordinator_history_init(struct TaskHistory *history,
 
     history->retention_seconds = retention_seconds;
 
-    if (capacity < COORDINATOR_MAX_COMPLETED)
-    {
-        capacity = COORDINATOR_MAX_COMPLETED;
-    }
-
     size_t slots = next_power_of_two(capacity * 2);
 
     if (slots == 0)
@@ -366,7 +362,7 @@ size_t coordinator_history_count(const struct TaskHistory *history)
     return history->count;
 }
 
-int coordinator_history_get(const struct TaskHistory *history,
+int coordinator_history_get_by_index(const struct TaskHistory *history,
                             size_t index,
                             struct HistoryRecord *out)
 {
@@ -383,7 +379,12 @@ int coordinator_history_get(const struct TaskHistory *history,
     return 1;
 }
 
-void coordinator_tasks_init(struct InFlightTable *table)
+void coordinator_tasks_init(
+    struct InFlightTable *table,
+    size_t inflight_capacity,
+    size_t completed_capacity,
+    size_t history_capacity,
+    time_t retention_seconds)
 {
     if (table == NULL)
     {
@@ -394,19 +395,30 @@ void coordinator_tasks_init(struct InFlightTable *table)
     table->next_task_id = 1;
     table->completed_next = 0;
 
-    size_t capacity = env_size("IDR_RESULT_RETENTION",
-                               DEFAULT_RESULT_RETENTION_COUNT,
-                               COORDINATOR_MAX_COMPLETED,
-                               10000000u);
+    /* Allocate in-flight entries */
+    if (inflight_capacity == 0)
+    {
+        inflight_capacity = runtime_inflight_capacity();
+    }
+    table->entries = calloc(inflight_capacity, sizeof(struct InFlightEntry));
+    table->capacity = inflight_capacity;
 
-    size_t ttl = env_size("IDR_RESULT_RETENTION_SECONDS",
-                          DEFAULT_RESULT_RETENTION_SECONDS,
-                          0,
-                          10u * 365u * 24u * 60u * 60u);
+    /* Allocate completed ring */
+    if (completed_capacity == 0)
+    {
+        completed_capacity = runtime_completed_capacity();
+    }
+    table->completed = calloc(completed_capacity, sizeof(struct CompletedRecord));
+    table->completed_capacity = completed_capacity;
 
+    /* History */
+    if (history_capacity == 0)
+    {
+        history_capacity = runtime_result_retention_capacity();
+    }
     (void)coordinator_history_init(&table->history,
-                                   capacity,
-                                   (time_t)ttl);
+                                   history_capacity,
+                                   retention_seconds);
 }
 
 void coordinator_tasks_destroy(struct InFlightTable *table)
@@ -415,6 +427,14 @@ void coordinator_tasks_destroy(struct InFlightTable *table)
     {
         return;
     }
+
+    free(table->entries);
+    table->entries = NULL;
+    table->capacity = 0;
+
+    free(table->completed);
+    table->completed = NULL;
+    table->completed_capacity = 0;
 
     coordinator_history_destroy(&table->history);
 }
@@ -441,8 +461,7 @@ int coordinator_record_inflight(struct InFlightTable *table,
         return 0;
     }
 
-    int i;
-    for (i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (!table->entries[i].in_use)
         {
@@ -469,8 +488,7 @@ int coordinator_take_inflight(struct InFlightTable *table,
         return 0;
     }
 
-    int i;
-    for (i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (table->entries[i].in_use &&
             table->entries[i].task_id == task_id)
@@ -503,8 +521,7 @@ int coordinator_peek_inflight(struct InFlightTable *table,
         return 0;
     }
 
-    int i;
-    for (i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (table->entries[i].in_use &&
             table->entries[i].task_id == task_id)
@@ -534,8 +551,7 @@ int coordinator_is_inflight(struct InFlightTable *table,
         return 0;
     }
 
-    int i;
-    for (i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (table->entries[i].in_use &&
             table->entries[i].task_id == task_id)
@@ -563,8 +579,7 @@ int coordinator_mark_accepted_worker(struct InFlightTable *table,
         return 0;
     }
 
-    int i;
-    for (i = 0; i < COORDINATOR_MAX_INFLIGHT; i++)
+    for (size_t i = 0; i < table->capacity; i++)
     {
         if (table->entries[i].in_use &&
             table->entries[i].task_id == task_id)
@@ -610,7 +625,7 @@ void coordinator_record_completed_at(struct InFlightTable *table,
     slot->state = state;
 
     table->completed_next =
-        (table->completed_next + 1) % COORDINATOR_MAX_COMPLETED;
+        (table->completed_next + 1) % table->completed_capacity;
 
     (void)coordinator_history_record(&table->history,
                                      task_id,
@@ -664,8 +679,7 @@ int coordinator_lookup_completed(struct InFlightTable *table,
         return 1;
     }
 
-    int i;
-    for (i = 0; i < COORDINATOR_MAX_COMPLETED; i++)
+    for (size_t i = 0; i < table->completed_capacity; i++)
     {
         if (table->completed[i].in_use &&
             table->completed[i].task_id == task_id)
@@ -687,4 +701,66 @@ int coordinator_lookup_completed(struct InFlightTable *table,
     }
 
     return 0;
+}
+
+/*
+ * Retained-history helpers.
+ */
+int coordinator_history_get(const struct InFlightTable *table,
+                            int task_id,
+                            int *worker_id,
+                            int *exit_status,
+                            int *state)
+{
+    return coordinator_lookup_completed(table, task_id, worker_id, exit_status, state);
+}
+
+void coordinator_history_expire(struct InFlightTable *table,
+                                time_t now)
+{
+    if (table == NULL || table->history.capacity == 0 ||
+        table->history.entries == NULL || table->history.slots == NULL)
+    {
+        return;
+    }
+
+    while (table->history.count > 0)
+    {
+        time_t oldest = table->history.entries[table->history.head].completed_at;
+
+        if (difftime(now, oldest) <=
+            (double)table->history.retention_seconds)
+        {
+            break;
+        }
+
+        history_remove_oldest(&table->history);
+    }
+}
+
+/*
+ * Iterate over all in-flight entries, calling callback for each.
+ * Callback returns 1 to continue, 0 to stop.
+ */
+typedef int (*inflight_callback_fn)(struct InFlightEntry *entry, void *ctx);
+
+void coordinator_iterate_inflight(struct InFlightTable *table,
+                                  inflight_callback_fn callback,
+                                  void *ctx)
+{
+    if (table == NULL || callback == NULL)
+    {
+        return;
+    }
+
+    for (size_t i = 0; i < table->capacity; i++)
+    {
+        if (table->entries[i].in_use)
+        {
+            if (!callback(&table->entries[i], ctx))
+            {
+                break;
+            }
+        }
+    }
 }

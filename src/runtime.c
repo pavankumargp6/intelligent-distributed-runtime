@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 #include "runtime.h"
+#include "runtime_limits.h"
 
 void initialize_runtime(struct Runtime *runtime,
                         struct TaskManager *task_manager,
@@ -20,9 +21,12 @@ void initialize_runtime(struct Runtime *runtime,
     /*
      * Initialize the worker registry.
      */
-    initialize_worker_registry(
-        &runtime->registry
-    );
+    if (!initialize_worker_registry(
+            &runtime->registry,
+            runtime_worker_registry_capacity()))
+    {
+        /* Allocation failure: leave registry zeroed. */
+    }
 
     if (runtime->scheduler != NULL)
     {

@@ -7,7 +7,6 @@
 #include "network_protocol.h"
 #include "auth.h"
 
-#define CONNECTION_POOL_CAPACITY 64
 #define CONNECTION_IDLE_TIMEOUT_SECONDS 5
 
 typedef enum
@@ -63,11 +62,14 @@ struct Connection
 
 struct ConnectionPool
 {
-    struct Connection conns[CONNECTION_POOL_CAPACITY];
+    struct Connection *conns;
+    size_t capacity;
     int count;
 };
 
-void pool_init(struct ConnectionPool *pool);
+int pool_init(struct ConnectionPool *pool, size_t capacity);
+
+void pool_destroy(struct ConnectionPool *pool);
 
 int pool_add(struct ConnectionPool *pool, int fd);
 

@@ -1,16 +1,48 @@
 #include <stddef.h>
+#include <stdlib.h>
 
 #include "worker_pool.h"
+#include "runtime_limits.h"
 
 /*
- * Initialize an empty worker pool.
+ * Initialize an empty worker pool with the given capacity.
+ *
+ * Capacity must be > 0. On allocation failure the pool
+ * is left in a zeroed state and the function returns 0.
  */
-void initialize_worker_pool(struct WorkerPool *pool)
+int initialize_worker_pool(
+    struct WorkerPool *pool,
+    size_t capacity)
+{
+    if (pool == NULL || capacity == 0) {
+        return 0;
+    }
+
+    pool->workers = calloc(capacity, sizeof(struct Worker));
+    if (pool->workers == NULL) {
+        pool->capacity = 0;
+        pool->count = 0;
+        return 0;
+    }
+
+    pool->capacity = capacity;
+    pool->count = 0;
+
+    return 1;
+}
+
+/*
+ * Destroy the worker pool and free allocated memory.
+ */
+void destroy_worker_pool(struct WorkerPool *pool)
 {
     if (pool == NULL) {
         return;
     }
 
+    free(pool->workers);
+    pool->workers = NULL;
+    pool->capacity = 0;
     pool->count = 0;
 }
 
@@ -40,7 +72,7 @@ int add_worker(struct WorkerPool *pool,
     /*
      * Enforce capacity for new workers.
      */
-    if (pool->count >= WORKER_POOL_CAPACITY) {
+    if ((size_t)pool->count >= pool->capacity) {
         return 0;
     }
 
