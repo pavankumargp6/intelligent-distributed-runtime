@@ -110,14 +110,20 @@ static int handle_worker_message(
     /*
      * Verify the MAC in secure mode. In insecure mode we trust
      * the message as-is and use it directly for dispatch.
+     *
+     * For worker messages, we first try verification with the
+     * shared worker secret for backward compatibility. Then we
+     * update the response secret based on the worker identity
+     * that will be extracted from the message.
      */
     char unsigned_buf[AUTH_MAX_SIGNED_SIZE];
     const char *dispatch_msg = message;
+    int worker_id_for_secret = 0; /* 0 = use shared/fallback */
 
     if (auth_config_is_secure())
     {
         const char *secret = is_worker_message
-            ? auth_config_worker_secret()
+            ? auth_config_worker_secret(0)  /* shared secret as fallback */
             : auth_config_client_secret();
 
         AuthResult r = auth_verify(secret,
@@ -140,15 +146,62 @@ static int handle_worker_message(
     }
 
     /*
-     * Record the authenticated role on the connection, and the
-     * secret and direction to use when signing the response.
+     * For worker messages, extract the worker_id early so we can
+     * use the correct per-worker secret for signing responses.
      */
     if (is_worker_message)
     {
+        /* Extract worker_id from the message type */
+        if (strncmp(dispatch_msg, "REGISTER|", 9) == 0)
+        {
+            int parsed_id;
+            if (sscanf(dispatch_msg, "REGISTER|%d", &parsed_id) == 1)
+            {
+                worker_id_for_secret = parsed_id;
+            }
+        }
+        else if (strncmp(dispatch_msg, "HEARTBEAT|", 10) == 0)
+        {
+            int parsed_id;
+            if (sscanf(dispatch_msg, "HEARTBEAT|%d", &parsed_id) == 1)
+            {
+                worker_id_for_secret = parsed_id;
+            }
+        }
+        else if (strncmp(dispatch_msg, "TASK_REQUEST|", 13) == 0)
+        {
+            int parsed_id;
+            if (sscanf(dispatch_msg, "TASK_REQUEST|%d", &parsed_id) == 1)
+            {
+                worker_id_for_secret = parsed_id;
+            }
+        }
+        else if (strncmp(dispatch_msg, "TASK_ACCEPT|", 12) == 0)
+        {
+            int parsed_id, epoch;
+            if (sscanf(dispatch_msg, "TASK_ACCEPT|%d|%d", &parsed_id, &epoch) == 2)
+            {
+                worker_id_for_secret = parsed_id;
+            }
+        }
+        else if (strncmp(dispatch_msg, "TASK_RESULT|", 12) == 0)
+        {
+            int parsed_id;
+            if (sscanf(dispatch_msg, "TASK_RESULT|%d", &parsed_id) == 1)
+            {
+                worker_id_for_secret = parsed_id;
+            }
+        }
+
+        /*
+         * Record the authenticated role on the connection, and the
+         * secret to use for signing the response. We use the
+         * per-worker secret if configured, falling back to shared.
+         */
         conn->peer_role = CONN_ROLE_WORKER;
         conn->response_direction = AUTH_DIR_COORD_TO_WORKER;
         conn->response_secret = auth_config_is_secure()
-            ? auth_config_worker_secret()
+            ? auth_config_worker_secret(worker_id_for_secret)
             : NULL;
     }
     else

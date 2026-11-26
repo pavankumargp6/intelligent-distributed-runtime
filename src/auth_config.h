@@ -6,18 +6,31 @@
  *
  * Environment variables:
  *
- *   IDR_WORKER_SECRET    Shared secret used by workers and by
- *                        the coordinator to sign and verify
- *                        messages on the worker channel.
+ *   IDR_WORKER_SECRET      Shared secret used by workers and by
+ *                          the coordinator to sign and verify
+ *                          messages on the worker channel.
+ *                          Used as fallback when per-worker
+ *                          credentials file is not configured.
  *
- *   IDR_CLIENT_SECRET    Shared secret used by clients and by
- *                        the coordinator to sign and verify
- *                        messages on the client channel.
+ *   IDR_CLIENT_SECRET      Shared secret used by clients and by
+ *                          the coordinator to sign and verify
+ *                          messages on the client channel.
  *
- *   IDR_INSECURE         If set to "1", authentication is
- *                        disabled. The coordinator additionally
- *                        requires that the bind address be
- *                        loopback in this mode.
+ *   IDR_WORKER_CREDENTIALS_FILE
+ *                          Optional path to a file containing
+ *                          per-worker credentials. Format:
+ *                              worker_id:secret
+ *                          One per line. Lines starting with # are
+ *                          comments. Empty lines ignored.
+ *                          If this is set, the coordinator will
+ *                          look up each worker's secret by ID.
+ *                          The shared IDR_WORKER_SECRET is used
+ *                          as a fallback for workers not listed.
+ *
+ *   IDR_INSECURE           If set to "1", authentication is
+ *                          disabled. The coordinator additionally
+ *                          requires that the bind address be
+ *                          loopback in this mode.
  *
  * In secure mode (the default) both secrets are required and
  * must be at least AUTH_CONFIG_MIN_SECRET_BYTES long. The
@@ -43,10 +56,14 @@ int auth_config_init(void);
 int auth_config_is_secure(void);
 
 /*
- * Returns the worker secret, or NULL if insecure mode is
- * enabled or init has not been called.
+ * Returns the worker secret for the given worker_id, or NULL if
+ * insecure mode is enabled or init has not been called.
+ *
+ * If per-worker credentials file is configured, looks up the
+ * worker's secret by ID. Falls back to the shared worker secret
+ * if the worker is not listed in the credentials file.
  */
-const char *auth_config_worker_secret(void);
+const char *auth_config_worker_secret(int worker_id);
 
 /*
  * Returns the client secret, or NULL if insecure mode is

@@ -172,21 +172,21 @@ execution of non-idempotent tasks (they become `TASK_UNKNOWN`).
 
 ## Phase 2 - Scheduler and worker lifecycle
 
-Status: in progress (v0.3.0 development).
+Status: in progress (v0.3.0 development), nearing completion.
 
 - [x] Use worker slots as the primary admission control
 - [x] Report running tasks and capacity (free slots) in heartbeats
 - [ ] Report CPU/memory load in heartbeats (registration-time only in v0.3.0)
 - [x] Reserve capacity on dispatch and release it on result/timeout/reap
-- [ ] Replace fixed task and worker structures with dynamic structures
-- [ ] Make queue and in-flight limits configurable
+- [x] Replace fixed task and worker structures with dynamic structures
+- [x] Make queue and in-flight limits configurable
 - [ ] Add fair-share and priority scheduling
 - [ ] Add queue high-water marks and explicit backpressure
 - [x] Report `TASK_FAILED` when a worker cannot start or wait for an accepted task
 - [x] Add a worker-side child supervisor (`waitpid`, SIGCHLD, child cap)
-- [ ] Enforce per-task execution timeouts and process-group cleanup
-- [ ] Retry result reporting with backoff and duplicate suppression
-- [ ] Add per-worker enrollment credentials
+- [x] Enforce per-task execution timeouts and process-group cleanup
+- [x] Retry result reporting with backoff and duplicate suppression
+- [x] Add per-worker enrollment credentials
 - [x] Add worker epochs/fencing tokens to assignments and results
 - [x] Validate that `TASK_ACCEPT` and `TASK_RESULT` come from the assigned worker
 - [x] Make the coordinator endpoint configurable for clients and workers

@@ -61,7 +61,8 @@ static int connect_to_runtime(const char *runtime_address)
     return fd;
 }
 
-static int sign_if_secure(const char *plain,
+static int sign_if_secure(const struct Worker *worker,
+                          const char *plain,
                           char *signed_buf,
                           size_t signed_buf_size,
                           const char **out_message)
@@ -72,7 +73,7 @@ static int sign_if_secure(const char *plain,
         return 1;
     }
 
-    AuthResult r = auth_sign(auth_config_worker_secret(),
+    AuthResult r = auth_sign(auth_config_worker_secret(worker->id),
                              AUTH_DIR_WORKER_TO_COORD,
                              AUTH_ROLE_WORKER,
                              plain,
@@ -89,7 +90,8 @@ static int sign_if_secure(const char *plain,
     return 1;
 }
 
-static int verify_if_secure(const char *signed_message,
+static int verify_if_secure(const struct Worker *worker,
+                            const char *signed_message,
                             char *plain_buf,
                             size_t plain_buf_size,
                             const char **out_message)
@@ -100,7 +102,7 @@ static int verify_if_secure(const char *signed_message,
         return 1;
     }
 
-    AuthResult r = auth_verify(auth_config_worker_secret(),
+    AuthResult r = auth_verify(auth_config_worker_secret(worker->id),
                                AUTH_DIR_COORD_TO_WORKER,
                                AUTH_ROLE_COORDINATOR,
                                signed_message,
@@ -240,72 +242,85 @@ int request_task_from_runtime(
 
     *has_task = 0;
 
-    int fd = connect_to_runtime(runtime_address);
+    static const int max_attempts = 3;
+    static const int base_delay_ms = 50;
+    static const int max_delay_ms = 200;
 
-    if (fd < 0)
+    int attempt = 0;
+    int delay_ms = base_delay_ms;
+
+    while (attempt < max_attempts)
     {
-        return 0;
+        int fd = connect_to_runtime(runtime_address);
+
+        if (fd >= 0)
+        {
+            char plain[64];
+            int n = snprintf(plain, sizeof(plain),
+                             "TASK_REQUEST|%d", worker->id);
+
+            if (n > 0 && (size_t)n < sizeof(plain))
+            {
+                char signed_buf[AUTH_MAX_SIGNED_SIZE];
+                const char *to_send = NULL;
+
+                if (sign_if_secure(worker, plain, signed_buf, sizeof(signed_buf), &to_send))
+                {
+                    if (send_message(fd, to_send))
+                    {
+                        char response[AUTH_MAX_SIGNED_SIZE];
+
+                        if (receive_message(fd, response, sizeof(response)))
+                        {
+                            close(fd);
+
+                            char plain_response[AUTH_MAX_SIGNED_SIZE];
+                            const char *verified = NULL;
+
+                            if (verify_if_secure(worker,
+                                                 response,
+                                                 plain_response,
+                                                 sizeof(plain_response),
+                                                 &verified))
+                            {
+                                if (strcmp(verified, "NO_TASK") == 0)
+                                {
+                                    return 1;
+                                }
+
+                                if (parse_task_assign(verified, task))
+                                {
+                                    *has_task = 1;
+                                    return 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            close(fd);
+        }
+
+        attempt++;
+
+        if (attempt < max_attempts)
+        {
+            struct timespec ts;
+            ts.tv_sec = delay_ms / 1000;
+            ts.tv_nsec = (delay_ms % 1000) * 1000000L;
+
+            nanosleep(&ts, NULL);
+
+            delay_ms = delay_ms * 2;
+            if (delay_ms > max_delay_ms)
+            {
+                delay_ms = max_delay_ms;
+            }
+        }
     }
 
-    char plain[64];
-    int n = snprintf(plain, sizeof(plain),
-                     "TASK_REQUEST|%d", worker->id);
-
-    if (n <= 0 || (size_t)n >= sizeof(plain))
-    {
-        close(fd);
-        return 0;
-    }
-
-    char signed_buf[AUTH_MAX_SIGNED_SIZE];
-    const char *to_send = NULL;
-
-    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
-    {
-        close(fd);
-        return 0;
-    }
-
-    if (!send_message(fd, to_send))
-    {
-        close(fd);
-        return 0;
-    }
-
-    char response[AUTH_MAX_SIGNED_SIZE];
-
-    if (!receive_message(fd, response, sizeof(response)))
-    {
-        close(fd);
-        return 0;
-    }
-
-    close(fd);
-
-    char plain_response[AUTH_MAX_SIGNED_SIZE];
-    const char *verified = NULL;
-
-    if (!verify_if_secure(response,
-                          plain_response,
-                          sizeof(plain_response),
-                          &verified))
-    {
-        return 0;
-    }
-
-    if (strcmp(verified, "NO_TASK") == 0)
-    {
-        return 1;
-    }
-
-    if (!parse_task_assign(verified, task))
-    {
-        return 0;
-    }
-
-    *has_task = 1;
-
-    return 1;
+    return 0;
 }
 
 int send_task_accept_to_runtime(
@@ -319,68 +334,91 @@ int send_task_accept_to_runtime(
         return 0;
     }
 
-    int fd = connect_to_runtime(runtime_address);
+    static const int max_attempts = 5;
+    static const int base_delay_ms = 50;
+    static const int max_delay_ms = 500;
 
-    if (fd < 0)
+    int attempt = 0;
+    int delay_ms = base_delay_ms;
+
+    while (attempt < max_attempts)
     {
-        return 0;
+        int fd = connect_to_runtime(runtime_address);
+
+        if (fd >= 0)
+        {
+            char plain[64];
+            int n = snprintf(plain, sizeof(plain),
+                             "TASK_ACCEPT|%d|%d", task_id, epoch);
+
+            if (n > 0 && (size_t)n < sizeof(plain))
+            {
+                char signed_buf[AUTH_MAX_SIGNED_SIZE];
+                const char *to_send = NULL;
+
+                if (sign_if_secure(worker, plain, signed_buf, sizeof(signed_buf), &to_send))
+                {
+                    if (send_message(fd, to_send))
+                    {
+                        char response[AUTH_MAX_SIGNED_SIZE];
+
+                        if (receive_message(fd, response, sizeof(response)))
+                        {
+                            close(fd);
+
+                            char plain_response[AUTH_MAX_SIGNED_SIZE];
+                            const char *verified = NULL;
+
+                            if (verify_if_secure(worker,
+                                                 response,
+                                                 plain_response,
+                                                 sizeof(plain_response),
+                                                 &verified))
+                            {
+                                if (strncmp(verified, "TASK_ACCEPT_ACK|", 16) == 0)
+                                {
+                                    return 1;
+                                }
+
+                                if (strncmp(verified, "TASK_ACCEPT_REJECT", 20) == 0)
+                                {
+                                    log_warn("task_accept_rejected",
+                                             "Coordinator rejected accept for task %d: %s",
+                                             task_id, verified);
+                                    return 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            close(fd);
+        }
+
+        attempt++;
+
+        if (attempt < max_attempts)
+        {
+            struct timespec ts;
+            ts.tv_sec = delay_ms / 1000;
+            ts.tv_nsec = (delay_ms % 1000) * 1000000L;
+
+            nanosleep(&ts, NULL);
+
+            delay_ms = delay_ms * 2;
+            if (delay_ms > max_delay_ms)
+            {
+                delay_ms = max_delay_ms;
+            }
+        }
     }
 
-    char plain[64];
-    int n = snprintf(plain, sizeof(plain),
-                     "TASK_ACCEPT|%d|%d", task_id, epoch);
+    log_error("task_accept_failed",
+              "Failed to send TASK_ACCEPT for task %d after %d attempts",
+              task_id, max_attempts);
 
-    if (n <= 0 || (size_t)n >= sizeof(plain))
-    {
-        close(fd);
-        return 0;
-    }
-
-    char signed_buf[AUTH_MAX_SIGNED_SIZE];
-    const char *to_send = NULL;
-
-    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
-    {
-        close(fd);
-        return 0;
-    }
-
-    if (!send_message(fd, to_send))
-    {
-        close(fd);
-        return 0;
-    }
-
-    char response[AUTH_MAX_SIGNED_SIZE];
-
-    if (!receive_message(fd, response, sizeof(response)))
-    {
-        close(fd);
-        return 0;
-    }
-
-    close(fd);
-
-    char plain_response[AUTH_MAX_SIGNED_SIZE];
-    const char *verified = NULL;
-
-    if (!verify_if_secure(response,
-                          plain_response,
-                          sizeof(plain_response),
-                          &verified))
-    {
-        return 0;
-    }
-
-    if (strncmp(verified, "TASK_ACCEPT_ACK|", 16) != 0)
-    {
-        log_warn("task_accept_rejected",
-                 "Coordinator replied %s for task %d",
-                 verified, task_id);
-        return 0;
-    }
-
-    return 1;
+    return 0;
 }
 
 int send_task_result_to_runtime(
@@ -394,68 +432,105 @@ int send_task_result_to_runtime(
         return 0;
     }
 
-    int fd = connect_to_runtime(runtime_address);
+    /*
+     * Retry configuration for result reporting.
+     *
+     * The coordinator has duplicate suppression, so retries are
+     * safe. We use exponential backoff starting at 100ms, capping
+     * at 2s, with a total retry budget of ~15s.
+     */
+    static const int max_attempts = 8;
+    static const int base_delay_ms = 100;
+    static const int max_delay_ms = 2000;
 
-    if (fd < 0)
+    int attempt = 0;
+    int delay_ms = base_delay_ms;
+
+    while (attempt < max_attempts)
     {
-        return 0;
+        int fd = connect_to_runtime(runtime_address);
+
+        if (fd >= 0)
+        {
+            char plain[256];
+            int n = snprintf(plain, sizeof(plain),
+                             "TASK_RESULT|%d|%d|%d|%d|%d",
+                             task->id,
+                             worker->id,
+                             task->exit_status,
+                             (int)task->state,
+                             task->epoch);
+
+            if (n > 0 && (size_t)n < sizeof(plain))
+            {
+                char signed_buf[AUTH_MAX_SIGNED_SIZE];
+                const char *to_send = NULL;
+
+                if (sign_if_secure(worker, plain, signed_buf, sizeof(signed_buf), &to_send))
+                {
+                    if (send_message(fd, to_send))
+                    {
+                        char response[AUTH_MAX_SIGNED_SIZE];
+
+                        if (receive_message(fd, response, sizeof(response)))
+                        {
+                            close(fd);
+
+                            char plain_response[AUTH_MAX_SIGNED_SIZE];
+                            const char *verified = NULL;
+
+                            if (verify_if_secure(worker,
+                                                 response,
+                                                 plain_response,
+                                                 sizeof(plain_response),
+                                                 &verified))
+                            {
+                                if (strcmp(verified, "TASK_RESULT_ACK") == 0)
+                                {
+                                    return 1;
+                                }
+
+                                if (strncmp(verified, "TASK_RESULT_REJECT", 20) == 0)
+                                {
+                                    log_warn("task_result_rejected",
+                                             "Coordinator rejected result for task %d: %s",
+                                             task->id, verified);
+                                    return 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            close(fd);
+        }
+
+        attempt++;
+
+        if (attempt < max_attempts)
+        {
+            log_warn("task_result_retry",
+                     "Retrying result for task %d (attempt %d of %d) in %d ms",
+                     task->id, attempt + 1, max_attempts, delay_ms);
+
+            struct timespec ts;
+            ts.tv_sec = delay_ms / 1000;
+            ts.tv_nsec = (delay_ms % 1000) * 1000000L;
+
+            nanosleep(&ts, NULL);
+
+            delay_ms = delay_ms * 2;
+            if (delay_ms > max_delay_ms)
+            {
+                delay_ms = max_delay_ms;
+            }
+        }
     }
 
-    char plain[256];
-    int n = snprintf(plain, sizeof(plain),
-                     "TASK_RESULT|%d|%d|%d|%d|%d",
-                     task->id,
-                     worker->id,
-                     task->exit_status,
-                     (int)task->state,
-                     task->epoch);
+    log_error("task_result_failed",
+              "Failed to report result for task %d after %d attempts",
+              task->id, max_attempts);
 
-    if (n <= 0 || (size_t)n >= sizeof(plain))
-    {
-        close(fd);
-        return 0;
-    }
-
-    char signed_buf[AUTH_MAX_SIGNED_SIZE];
-    const char *to_send = NULL;
-
-    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
-    {
-        close(fd);
-        return 0;
-    }
-
-    if (!send_message(fd, to_send))
-    {
-        close(fd);
-        return 0;
-    }
-
-    char response[AUTH_MAX_SIGNED_SIZE];
-
-    if (!receive_message(fd, response, sizeof(response)))
-    {
-        close(fd);
-        return 0;
-    }
-
-    close(fd);
-
-    char plain_response[AUTH_MAX_SIGNED_SIZE];
-    const char *verified = NULL;
-
-    if (!verify_if_secure(response,
-                          plain_response,
-                          sizeof(plain_response),
-                          &verified))
-    {
-        return 0;
-    }
-
-    if (strcmp(verified, "TASK_RESULT_ACK") != 0)
-    {
-        return 0;
-    }
-
-    return 1;
+    return 0;
 }

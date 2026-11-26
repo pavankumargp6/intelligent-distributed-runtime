@@ -56,7 +56,8 @@ static int connect_to_runtime(const char *runtime_address)
     return fd;
 }
 
-static int sign_if_secure(const char *plain,
+static int sign_if_secure(const struct Worker *worker,
+                          const char *plain,
                           char *signed_buf,
                           size_t signed_buf_size,
                           const char **out_message)
@@ -67,7 +68,7 @@ static int sign_if_secure(const char *plain,
         return 1;
     }
 
-    AuthResult r = auth_sign(auth_config_worker_secret(),
+    AuthResult r = auth_sign(auth_config_worker_secret(worker->id),
                              AUTH_DIR_WORKER_TO_COORD,
                              AUTH_ROLE_WORKER,
                              plain,
@@ -84,7 +85,8 @@ static int sign_if_secure(const char *plain,
     return 1;
 }
 
-static int verify_if_secure(const char *signed_message,
+static int verify_if_secure(const struct Worker *worker,
+                            const char *signed_message,
                             char *plain_buf,
                             size_t plain_buf_size,
                             const char **out_message)
@@ -95,7 +97,7 @@ static int verify_if_secure(const char *signed_message,
         return 1;
     }
 
-    AuthResult r = auth_verify(auth_config_worker_secret(),
+    AuthResult r = auth_verify(auth_config_worker_secret(worker->id),
                                AUTH_DIR_COORD_TO_WORKER,
                                AUTH_ROLE_COORDINATOR,
                                signed_message,
@@ -140,7 +142,7 @@ int register_worker_with_runtime(
     char signed_buf[AUTH_MAX_SIGNED_SIZE];
     const char *to_send = NULL;
 
-    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
+    if (!sign_if_secure(worker, plain, signed_buf, sizeof(signed_buf), &to_send))
     {
         close(fd);
         return 0;
@@ -165,7 +167,8 @@ int register_worker_with_runtime(
     char plain_response[AUTH_MAX_SIGNED_SIZE];
     const char *verified = NULL;
 
-    if (!verify_if_secure(response,
+    if (!verify_if_secure(worker,
+                          response,
                           plain_response,
                           sizeof(plain_response),
                           &verified))
@@ -208,7 +211,7 @@ int send_worker_heartbeat(
     char signed_buf[AUTH_MAX_SIGNED_SIZE];
     const char *to_send = NULL;
 
-    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
+    if (!sign_if_secure(worker, plain, signed_buf, sizeof(signed_buf), &to_send))
     {
         close(fd);
         return 0;
@@ -233,7 +236,8 @@ int send_worker_heartbeat(
     char plain_response[AUTH_MAX_SIGNED_SIZE];
     const char *verified = NULL;
 
-    if (!verify_if_secure(response,
+    if (!verify_if_secure(worker,
+                          response,
                           plain_response,
                           sizeof(plain_response),
                           &verified))
@@ -282,7 +286,7 @@ int register_worker_with_runtime_with_load(
     char signed_buf[AUTH_MAX_SIGNED_SIZE];
     const char *to_send = NULL;
 
-    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
+    if (!sign_if_secure(worker, plain, signed_buf, sizeof(signed_buf), &to_send))
     {
         close(fd);
         return 0;
@@ -307,7 +311,8 @@ int register_worker_with_runtime_with_load(
     char plain_response[AUTH_MAX_SIGNED_SIZE];
     const char *verified = NULL;
 
-    if (!verify_if_secure(response,
+    if (!verify_if_secure(worker,
+                          response,
                           plain_response,
                           sizeof(plain_response),
                           &verified))
@@ -356,7 +361,7 @@ int send_worker_heartbeat_with_load(
     char signed_buf[AUTH_MAX_SIGNED_SIZE];
     const char *to_send = NULL;
 
-    if (!sign_if_secure(plain, signed_buf, sizeof(signed_buf), &to_send))
+    if (!sign_if_secure(worker, plain, signed_buf, sizeof(signed_buf), &to_send))
     {
         close(fd);
         return 0;
@@ -381,7 +386,8 @@ int send_worker_heartbeat_with_load(
     char plain_response[AUTH_MAX_SIGNED_SIZE];
     const char *verified = NULL;
 
-    if (!verify_if_secure(response,
+    if (!verify_if_secure(worker,
+                          response,
                           plain_response,
                           sizeof(plain_response),
                           &verified))
