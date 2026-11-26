@@ -332,6 +332,9 @@ test:
 	@echo "===== dispatch_timeout_test.sh ====="
 	bash tests/dispatch_timeout_test.sh
 	@echo ""
+	@echo "===== exec_timeout_test.sh ====="
+	bash tests/exec_timeout_test.sh
+	@echo ""
 	@echo "===== endpoint_config_test.sh ====="
 	bash tests/endpoint_config_test.sh
 	@echo ""
