@@ -154,7 +154,7 @@ gcc -Wall -Wextra -Isrc \
     src/worker_registry.c src/task_manager.c src/task_queue.c \
     src/scheduler.c src/worker_pool.c src/worker.c src/worker_resources.c \
     src/process_info.c src/cpu_monitor.c src/task_executor.c src/task_metrics.c \
-    src/runtime_stats.c src/network_protocol.c src/runtime_endpoint.c src/worker_registration.c \
+    src/runtime_stats.c src/network_protocol.c src/runtime_endpoint.c src/runtime_limits.c src/worker_registration.c \
     src/coordinator_tasks.c src/coordinator_handlers.c src/wire_fields.c \
     src/log.c src/wal.c src/recovery.c src/metrics_json.c src/connection_pool.c \
     src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
@@ -165,13 +165,13 @@ gcc -Wall -Wextra -Isrc \
     src/process_info.c src/cpu_monitor.c \
     src/worker_registration.c src/worker_registration_client.c \
     src/worker_task_client.c src/wire_fields.c \
-    src/task_executor.c src/task_metrics.c src/network_protocol.c src/runtime_endpoint.c \
+    src/task_executor.c src/task_metrics.c src/network_protocol.c src/runtime_endpoint.c src/runtime_limits.c \
     src/log.c src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$WORKER_BIN" || exit 1
 
 gcc -Wall -Wextra -Isrc \
     tests/bench_client.c \
-    src/network_protocol.c src/runtime_endpoint.c src/wire_fields.c \
+    src/network_protocol.c src/runtime_endpoint.c src/runtime_limits.c src/wire_fields.c \
     src/sha256.c src/hmac.c src/auth.c src/auth_config.c \
     -o "$CLIENT_BIN" || exit 1
 

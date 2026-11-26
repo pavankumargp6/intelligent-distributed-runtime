@@ -5,8 +5,6 @@
 
 #include "worker.h"
 
-#define WORKER_REGISTRY_CAPACITY 32
-
 /*
  * Default per-worker task cap. A worker that does not report a
  * capacity in its registration or heartbeat is treated as able to
@@ -88,17 +86,26 @@ struct WorkerRegistryEntry
 
 struct WorkerRegistry
 {
-    struct WorkerRegistryEntry workers[
-        WORKER_REGISTRY_CAPACITY
-    ];
-
+    struct WorkerRegistryEntry *workers;
+    size_t capacity;
     int count;
 };
 
 /*
- * Initialize the registry.
+ * Initialize the registry with the given capacity.
+ *
+ * Capacity must be > 0. On allocation failure the registry
+ * is left in a zeroed state and the function returns 0.
  */
-void initialize_worker_registry(
+int initialize_worker_registry(
+    struct WorkerRegistry *registry,
+    size_t capacity
+);
+
+/*
+ * Destroy the registry and free allocated memory.
+ */
+void destroy_worker_registry(
     struct WorkerRegistry *registry
 );
 
@@ -240,4 +247,5 @@ int worker_increment_epoch(
     struct WorkerRegistry *registry,
     int worker_id
 );
+
 #endif

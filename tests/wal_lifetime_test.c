@@ -186,13 +186,13 @@ int main(void)
     memset(&runtime, 0, sizeof(runtime));
     memset(&manager, 0, sizeof(manager));
 
-    initialize_task_manager(&manager);
+    initialize_task_manager(&manager, 512);
     initialize_runtime_stats(&runtime.stats);
 
     runtime.task_manager = &manager;
     runtime.wal.fd = -1;
 
-    coordinator_tasks_init(&table);
+    coordinator_tasks_init(&table, 64, 64, 100000, 0);
 
     if (!recovery_start(&runtime, &table, g_base))
     {
@@ -285,13 +285,13 @@ int main(void)
             memset(&runtime, 0, sizeof(runtime));
             memset(&manager, 0, sizeof(manager));
 
-            initialize_task_manager(&manager);
+            initialize_task_manager(&manager, 512);
             initialize_runtime_stats(&runtime.stats);
 
             runtime.task_manager = &manager;
             runtime.wal.fd = -1;
 
-            coordinator_tasks_init(&table);
+            coordinator_tasks_init(&table, 64, 64, 100000, 0);
 
             if (!recovery_start(&runtime, &table, g_base))
             {
@@ -351,7 +351,7 @@ int main(void)
     CHECK(runtime.stats.tasks_completed == (int)total,
           "lifetime completed counter reaches 1M");
 
-    CHECK(coordinator_history_count(&table.history) == 5000,
+    CHECK(coordinator_history_count(&table.history) == 100000,
           "retained results stay bounded at the configured capacity");
 
     CHECK(coordinator_lookup_completed(&table, 1, NULL, NULL, NULL) == 0,
@@ -386,13 +386,13 @@ int main(void)
     wal_close(&runtime.wal);
     coordinator_tasks_destroy(&table);
 
-    initialize_task_manager(&manager);
+    initialize_task_manager(&manager, 512);
     initialize_runtime_stats(&runtime.stats);
 
     runtime.task_manager = &manager;
     runtime.wal.fd = -1;
 
-    coordinator_tasks_init(&table);
+    coordinator_tasks_init(&table, 64, 64, 100000, 0);
 
     struct timespec restart_begin;
     struct timespec restart_end;
@@ -413,7 +413,7 @@ int main(void)
           "restart never reuses or rewinds task ids");
     CHECK(runtime.stats.tasks_completed == (int)total,
           "restart restores the lifetime completed counter");
-    CHECK(coordinator_history_count(&table.history) == 5000,
+    CHECK(coordinator_history_count(&table.history) == 100000,
           "restart restores the bounded retained history");
     CHECK(recovery_seconds < 5.0,
           "recovery after 1M tasks stays under 5 seconds");

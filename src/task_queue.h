@@ -3,18 +3,30 @@
 
 #include "task.h"
 
-#define TASK_QUEUE_CAPACITY 512
-
 struct TaskQueue
 {
-    struct Task tasks[TASK_QUEUE_CAPACITY];
-
+    struct Task *tasks;
+    size_t capacity;
     int front;
     int rear;
     int count;
 };
 
-void initialize_task_queue(struct TaskQueue *queue);
+/*
+ * Initialize the queue with the given capacity.
+ *
+ * Capacity must be > 0. On allocation failure the queue
+ * is left in a zeroed state and the function returns 0.
+ */
+int initialize_task_queue(
+    struct TaskQueue *queue,
+    size_t capacity);
+
+/*
+ * Destroy the queue and free allocated memory.
+ */
+void destroy_task_queue(
+    struct TaskQueue *queue);
 
 int enqueue_task(struct TaskQueue *queue,
                  struct Task *task);

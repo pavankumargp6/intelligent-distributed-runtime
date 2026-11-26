@@ -150,7 +150,7 @@ int schedule_next_task_for_worker(struct Scheduler *scheduler,
      */
     for (int i = 0; i < queue->count; i++)
     {
-        int actual_index = (queue->front + i) % TASK_QUEUE_CAPACITY;
+        int actual_index = (queue->front + i) % (int)queue->capacity;
         struct Task *candidate = &queue->tasks[actual_index];
 
         if (task_fits_worker(candidate, &asking->resources) &&

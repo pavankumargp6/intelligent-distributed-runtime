@@ -13,6 +13,7 @@
 #include "runtime_server.h"
 #include "network_protocol.h"
 #include "worker_registration.h"
+#include "runtime_limits.h"
 #include "coordinator_tasks.h"
 #include "coordinator_handlers.h"
 #include "connection_pool.h"
@@ -23,7 +24,6 @@
 #include "auth_config.h"
 #include "log.h"
 
-#define MAX_POLLFDS (CONNECTION_POOL_CAPACITY + 2)
 #define DEFAULT_WAL_PATH "./idr-wal.log"
 #define DEFAULT_BIND_ADDR "127.0.0.1"
 
@@ -377,7 +377,11 @@ int start_runtime_server(
     }
 
     struct InFlightTable in_flight;
-    coordinator_tasks_init(&in_flight);
+    coordinator_tasks_init(&in_flight,
+                           runtime_inflight_capacity(),
+                           runtime_completed_capacity(),
+                           runtime_result_retention_capacity(),
+                           0);
 
     const char *wal_path = getenv("IDR_WAL_PATH");
     if (wal_path == NULL || wal_path[0] == '\0')
@@ -438,8 +442,15 @@ int start_runtime_server(
                  "Every message will be verified.");
     }
 
-    static struct ConnectionPool pool;
-    pool_init(&pool);
+    struct ConnectionPool pool;
+    size_t pool_capacity = runtime_connection_pool_capacity();
+    if (!pool_init(&pool, pool_capacity))
+    {
+        log_error("connection_pool_init_failed",
+                  "Failed to allocate connection pool");
+        wal_close(&runtime->wal);
+        return 0;
+    }
 
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -447,6 +458,7 @@ int start_runtime_server(
     {
         perror("socket");
         wal_close(&runtime->wal);
+        pool_destroy(&pool);
         return 0;
     }
 
@@ -458,6 +470,7 @@ int start_runtime_server(
         perror("setsockopt");
         close(server_socket);
         wal_close(&runtime->wal);
+        pool_destroy(&pool);
         return 0;
     }
 
@@ -469,6 +482,7 @@ int start_runtime_server(
         perror("fcntl");
         close(server_socket);
         wal_close(&runtime->wal);
+        pool_destroy(&pool);
         return 0;
     }
 
@@ -485,6 +499,7 @@ int start_runtime_server(
                   bind_addr);
         close(server_socket);
         wal_close(&runtime->wal);
+        pool_destroy(&pool);
         return 0;
     }
 
@@ -495,6 +510,7 @@ int start_runtime_server(
         perror("bind");
         close(server_socket);
         wal_close(&runtime->wal);
+        pool_destroy(&pool);
         return 0;
     }
 
@@ -503,6 +519,7 @@ int start_runtime_server(
         perror("listen");
         close(server_socket);
         wal_close(&runtime->wal);
+        pool_destroy(&pool);
         return 0;
     }
 
@@ -549,7 +566,17 @@ int start_runtime_server(
         }
     }
 
-    struct pollfd pollfds[MAX_POLLFDS];
+    size_t max_pollfds = pool_capacity + 2; /* +2 for server_socket and metrics_socket */
+    struct pollfd *pollfds = calloc(max_pollfds, sizeof(struct pollfd));
+    if (pollfds == NULL)
+    {
+        log_error("pollfds_alloc_failed", "Failed to allocate pollfd array");
+        close(server_socket);
+        if (metrics_socket >= 0) close(metrics_socket);
+        wal_close(&runtime->wal);
+        pool_destroy(&pool);
+        return 0;
+    }
     const int poll_timeout_ms = 1000;
 
 
@@ -559,7 +586,7 @@ int start_runtime_server(
         pollfds[0].events = POLLIN;
         pollfds[0].revents = 0;
 
-        int nfds = pool_build_pollfds(&pool, pollfds, MAX_POLLFDS - 1);
+        int nfds = pool_build_pollfds(&pool, pollfds, (int)max_pollfds - 1);
         
         int total_fds = nfds;
         if (metrics_socket >= 0)
@@ -643,11 +670,11 @@ int start_runtime_server(
 
             int slot = -1;
 
-            for (int j = 0; j < CONNECTION_POOL_CAPACITY; j++)
+            for (size_t j = 0; j < pool.capacity; j++)
             {
                 if (pool.conns[j].fd == pollfds[i].fd)
                 {
-                    slot = j;
+                    slot = (int)j;
                     break;
                 }
             }
@@ -756,6 +783,8 @@ int start_runtime_server(
     close(server_socket);
     wal_close(&runtime->wal);
     coordinator_tasks_destroy(&in_flight);
+    pool_destroy(&pool);
+    free(pollfds);
 
     return 1;
 }

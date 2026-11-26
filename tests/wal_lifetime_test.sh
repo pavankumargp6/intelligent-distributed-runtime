@@ -19,6 +19,7 @@ gcc -Wall -Wextra -DIDR_TEST_WAL_NO_SYNC -Isrc \
     src/wal.c \
     src/log.c \
     src/coordinator_tasks.c \
+    src/runtime_limits.c \
     src/task_manager.c \
     src/task_queue.c \
     src/task_metrics.c \

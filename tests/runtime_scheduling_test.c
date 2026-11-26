@@ -13,7 +13,7 @@ int main(void)
     struct Task scheduled = {0};
     struct Worker *selected = NULL;
 
-    initialize_task_manager(&manager);
+    initialize_task_manager(&manager, 512);
     initialize_worker_pool(&pool);
     initialize_scheduler(&scheduler, &manager, &pool);
     initialize_runtime(&runtime, &manager, &scheduler, &pool);

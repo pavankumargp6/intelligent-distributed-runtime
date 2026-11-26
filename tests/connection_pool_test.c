@@ -130,7 +130,7 @@ static void test_partial_then_full(void)
     }
 
     struct ConnectionPool pool;
-    pool_init(&pool);
+    pool_init(&pool, 64);
 
     int idx = pool_add(&pool, a);
     CHECK(idx >= 0, "pool_add accepted fd");
@@ -170,7 +170,7 @@ static void test_oversize_length(void)
     }
 
     struct ConnectionPool pool;
-    pool_init(&pool);
+    pool_init(&pool, 64);
 
     int idx = pool_add(&pool, a);
     struct Connection *c = &pool.conns[idx];
@@ -197,7 +197,7 @@ static void test_peer_close(void)
     }
 
     struct ConnectionPool pool;
-    pool_init(&pool);
+    pool_init(&pool, 64);
 
     int idx = pool_add(&pool, a);
     struct Connection *c = &pool.conns[idx];
@@ -221,7 +221,7 @@ static void test_idle_expiry(void)
     }
 
     struct ConnectionPool pool;
-    pool_init(&pool);
+    pool_init(&pool, 64);
 
     int idx = pool_add(&pool, a);
     CHECK(idx >= 0, "pool_add for idle test");
@@ -256,7 +256,7 @@ static void test_flush_drains_pending(void)
     }
 
     struct ConnectionPool pool;
-    pool_init(&pool);
+    pool_init(&pool, 64);
 
     int idx = pool_add(&pool, server);
 
@@ -332,6 +332,6 @@ int main(void)
     test_peer_close();
     test_idle_expiry();
     test_flush_drains_pending();
-        printf("\n%d passed, %d failed\n", passed, failed);
+    printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

@@ -4,23 +4,27 @@
 #include "worker.h"
 #include "worker_registry.h"
 
-#define WORKER_POOL_CAPACITY 16
-
-/*
- * Collection of workers managed by
- * the distributed runtime.
- */
 struct WorkerPool
 {
-    struct Worker workers[WORKER_POOL_CAPACITY];
-
+    struct Worker *workers;
+    size_t capacity;
     int count;
 };
 
 /*
- * Initialize an empty worker pool.
+ * Initialize an empty worker pool with the given capacity.
+ *
+ * Capacity must be > 0. On allocation failure the pool
+ * is left in a zeroed state and the function returns 0.
  */
-void initialize_worker_pool(struct WorkerPool *pool);
+int initialize_worker_pool(
+    struct WorkerPool *pool,
+    size_t capacity);
+
+/*
+ * Destroy the worker pool and free allocated memory.
+ */
+void destroy_worker_pool(struct WorkerPool *pool);
 
 /*
  * Add a worker to the pool.
